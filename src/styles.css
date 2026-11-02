@@ -712,6 +712,32 @@ p {
   width: 100%;
   margin-top: 18px;
 }
+.cart-summary > .pickup-notifications {
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--color-text);
+}
+.pickup-notifications > svg { flex: 0 0 auto; color: var(--color-brand); margin-top: 2px; }
+.pickup-notifications > div { min-width: 0; }
+.pickup-notifications strong { display: block; font-size: 14px; }
+.pickup-notifications p { margin: 3px 0 0; }
+.pickup-notifications button {
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-background);
+  color: var(--color-brand);
+  font: 600 14px "DM Sans", sans-serif;
+  cursor: pointer;
+}
+.pickup-notifications button:hover { border-color: var(--color-brand); }
+.pickup-notifications button:focus-visible { outline: 3px solid var(--color-orange-soft); outline-offset: 2px; }
+.pickup-notifications button:disabled { opacity: .55; cursor: wait; }
+.pickup-notifications .pickup-notifications-error { color: var(--color-error); }
 .site-footer {
   border-top: 1px solid var(--color-border);
   background: var(--color-background);

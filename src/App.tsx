@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { Button, EmptyState, SearchField } from "./components/ui";
+import { disablePickupNotifications, PickupNotifications } from "./components/PickupNotifications";
 import {
   BrandAccountIcon,
   BrandCalendarIcon,
@@ -2126,6 +2127,7 @@ export default function App() {
     }
   }
   async function logout() {
+    await disablePickupNotifications().catch(() => {});
     await api("/api/auth/logout", {});
     invalidateCache();
     setCatalogReady(false);
@@ -2523,6 +2525,8 @@ export default function App() {
                   <p>
                     <strong>Pago:</strong> QR al recibir tu comida.
                   </p>
+                  {state.user?.role === "consumer" &&
+                    <PickupNotifications userId={state.user.id} />}
                   {bookingError && (
                     <p className="form-error" role="alert">
                       {bookingError}

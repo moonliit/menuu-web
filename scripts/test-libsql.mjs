@@ -95,6 +95,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     updateKitchenReservation,
   } = await import("../server/kitchen.mjs");
   const { handleRequest } = await import("../server/index.mjs");
+  const { dispatchPickupReminders, savePushSubscription } = await import("../server/push.mjs");
 
   try {
     const migrationDb = getDb();
@@ -229,6 +230,30 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     );
     assert.equal((await getCatalog()).offerings[0].remaining, 0);
     assert.equal((await getOrders(consumers[0].id)).length, 1);
+    const previousVapid = [process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY,
+      process.env.VAPID_SUBJECT, process.env.PUSH_DISPATCH_SECRET];
+    process.env.VAPID_PUBLIC_KEY = "test-public-key";
+    process.env.VAPID_PRIVATE_KEY = "test-private-key";
+    process.env.VAPID_SUBJECT = "mailto:avisos@example.com";
+    process.env.PUSH_DISPATCH_SECRET = "test-secret-at-least-24-characters";
+    const subscription = {
+      endpoint: "https://fcm.googleapis.com/fcm/send/test-device",
+      keys: { p256dh: "A".repeat(88), auth: "B".repeat(22) },
+    };
+    await savePushSubscription(consumers[0].id, subscription);
+    const reminderTime = new Date(`${offerDate}T12:55:15-05:00`);
+    const pushed = [];
+    assert.equal((await dispatchPickupReminders(reminderTime, async (target, payload) => {
+      pushed.push({ target, payload: JSON.parse(payload) });
+    })).sent, 1);
+    assert.equal(pushed[0].target.endpoint, subscription.endpoint);
+    assert.match(pushed[0].payload.body, /5 minutos/);
+    assert.equal((await dispatchPickupReminders(reminderTime, async () => pushed.push("duplicate"))).sent, 0);
+    assert.equal(pushed.length, 1);
+    ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT", "PUSH_DISPATCH_SECRET"].forEach((name, index) => {
+      if (previousVapid[index] === undefined) delete process.env[name];
+      else process.env[name] = previousVapid[index];
+    });
     const secondDate = new Date(`${offerDate}T12:00:00Z`);
 
     secondDate.setUTCDate(secondDate.getUTCDate() + 1);
@@ -336,6 +361,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         headers: { Cookie: cookie },
       });
       assert.equal((await sessionResponse.json()).user.email, "nueva@utec.edu.pe");
+      assert.equal((await fetch(`${base}/api/push/dispatch`)).status, 401);
       const catalogResponse = await fetch(`${base}/api/catalog`);
       assert.equal(catalogResponse.status, 200);
       assert.match(catalogResponse.headers.get("cache-control"), /s-maxage=30/);

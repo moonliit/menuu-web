@@ -39,6 +39,7 @@ import {
   updateKitchenReservation,
 } from "./kitchen.mjs";
 import { migrate } from "../scripts/migrate.mjs";
+import { dispatchPickupReminders, pushConfig, removePushSubscription, savePushSubscription, validDispatchSecret } from "./push.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const isDev = process.argv.includes("--dev");
@@ -204,6 +205,22 @@ function visibleOrder(order, now = new Date()) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/push/dispatch") {
+    if (!validDispatchSecret(req.headers.authorization))
+      return error(res, 401, "Acceso no permitido.");
+    return json(res, 200, await dispatchPickupReminders());
+  }
+  if (req.method === "GET" && url.pathname === "/api/push/config")
+    return json(res, 200, pushConfig());
+  if (url.pathname === "/api/push/subscription" || url.pathname === "/api/push/unsubscribe") {
+    if (req.method !== "POST" || !sameOrigin(req)) return error(res, 403, "Solicitud no permitida.");
+    const user = await userFromSession(sessionToken(req));
+    if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+    const data = await body(req);
+    return json(res, 200, url.pathname === "/api/push/subscription"
+      ? await savePushSubscription(user.id, data)
+      : await removePushSubscription(user.id, data?.endpoint));
+  }
   const imageMatch = /^\/api\/kitchen\/image\/([a-f0-9-]{36})$/.exec(
     url.pathname,
   );
