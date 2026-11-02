@@ -18,6 +18,7 @@ import {
   findUserByEmail,
   getCatalog,
   getOrders,
+  getOrdersPage,
   insertSession,
   insertUser,
   removeSession,
@@ -65,10 +66,10 @@ const mime = {
   ".ico": "image/x-icon",
 };
 
-function json(res, status, value) {
+function json(res, status, value, cacheControl = "no-store") {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store",
+    "Cache-Control": cacheControl,
   });
   res.end(JSON.stringify(value));
 }
@@ -179,6 +180,15 @@ function validBirthDate(value) {
   );
 }
 
+function listPage(url, defaultLimit = 20) {
+  const limit = Number(url.searchParams.get("limit") ?? defaultLimit);
+  const offset = Number(url.searchParams.get("offset") ?? 0);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 20 ||
+      !Number.isInteger(offset) || offset < 0 || offset > 100000)
+    throw Object.assign(new Error("Paginación inválida."), { status: 400 });
+  return { limit, offset };
+}
+
 function visibleOrder(order, now = new Date()) {
   if (order.status !== "reservado") return order;
 
@@ -216,19 +226,27 @@ async function handleApi(req, res, url) {
     if (!user) return error(res, 401, "Inicia sesión como admin.");
     if (user.role !== "admin")
       return error(res, 403, "Acceso de admin requerido.");
-    if (req.method === "GET" && url.pathname === "/api/admin/data")
-      return json(res, 200, await adminData());
+    if (req.method === "GET" && url.pathname === "/api/admin/data") {
+      const weekValue = url.searchParams.get("week");
+      const week = weekValue === null ? null : Number(weekValue);
+      const kitchen = url.searchParams.get("kitchen") || "all";
+      if ((week !== null && ![0, 1].includes(week)) ||
+          (kitchen !== "all" && !/^[a-zA-Z0-9-]{1,100}$/.test(kitchen)))
+        return error(res, 400, "Filtros inválidos.");
+      return json(res, 200, await adminData({ week, kitchen, ...listPage(url) }));
+    }
     const candidatesMatch =
       /^\/api\/admin\/offers\/([a-zA-Z0-9-]+)\/students$/.exec(url.pathname);
     if (req.method === "GET" && candidatesMatch) {
       const kitchenId = await adminOfferKitchen(candidatesMatch[1]);
-      return json(res, 200, {
-        students: await kitchenStudentCandidates(
+      return json(res, 200,
+        await kitchenStudentCandidates(
           kitchenId,
           candidatesMatch[1],
           url.searchParams.get("q") || "",
+          listPage(url),
         ),
-      });
+      );
     }
     if (req.method !== "POST" || !sameOrigin(req))
       return error(res, 403, "Solicitud no permitida.");
@@ -248,7 +266,7 @@ async function handleApi(req, res, url) {
       return json(
         res,
         200,
-        await updateKitchenReservation(kitchenId, user.id, data),
+        await updateKitchenReservation(kitchenId, user.id, data, true),
       );
     }
     return error(res, 404, "Ruta no encontrada.");
@@ -261,18 +279,21 @@ async function handleApi(req, res, url) {
       return error(res, 401, "Inicia sesión como cocina.");
 
     if (req.method === "GET" && url.pathname === "/api/kitchen/data") {
-      return json(res, 200, await kitchenData(user.kitchenId));
+      return json(res, 200, await kitchenData(user.kitchenId, {
+        includeAnalytics: url.searchParams.get("scope") !== "operations",
+      }));
     }
     const candidatesMatch =
       /^\/api\/kitchen\/offers\/([a-zA-Z0-9-]+)\/students$/.exec(url.pathname);
     if (req.method === "GET" && candidatesMatch)
-      return json(res, 200, {
-        students: await kitchenStudentCandidates(
+      return json(res, 200,
+        await kitchenStudentCandidates(
           user.kitchenId,
           candidatesMatch[1],
           url.searchParams.get("q") || "",
+          listPage(url),
         ),
-      });
+      );
 
     if (req.method !== "POST" || !sameOrigin(req))
       return error(res, 403, "Solicitud no permitida.");
@@ -341,6 +362,28 @@ async function handleApi(req, res, url) {
       );
 
     return error(res, 404, "Ruta no encontrada.");
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/session") {
+    const user = await userFromSession(sessionToken(req));
+    return json(res, 200, { user: publicUser(user), careers });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/catalog")
+    return json(res, 200, await getCatalog(),
+      url.searchParams.has("fresh")
+        ? "no-store"
+        : "public, max-age=15, s-maxage=30, stale-while-revalidate=30");
+
+  if (req.method === "GET" && url.pathname === "/api/orders") {
+    const user = await userFromSession(sessionToken(req));
+    if (!user || user.role !== "consumer")
+      return error(res, 401, "Inicia sesión como estudiante.");
+    const page = await getOrdersPage(user.id, listPage(url, 10));
+    return json(res, 200, {
+      ...page,
+      orders: page.orders.map((order) => visibleOrder(order)),
+    });
   }
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {

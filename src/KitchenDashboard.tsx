@@ -36,6 +36,7 @@ import {
 } from "./data/catalog";
 import "./kitchen.css";
 import "./admin.css";
+import { cachedRequest, invalidateCache } from "./data/queryCache";
 
 type Dish = {
   id: string;
@@ -76,10 +77,36 @@ type KitchenReservation = {
   status: string;
   fulfillmentStatus: "pending" | "delivered" | "no_show";
   paymentRecorded: string | null;
+  deliveredAt: string | null;
   createdAt: string;
   manualAdded: boolean;
 };
 type ReservationState = "pending" | "delivered" | "cancelled";
+const limaDeliveryInput = (value: string) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const part = (type: string) =>
+    parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
+};
+const deliveredAtLabel = (value: string) =>
+  new Intl.DateTimeFormat("es-PE", {
+    timeZone: "America/Lima",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+    .format(new Date(value))
+    .replace(/([ap])\.\s*m\./gi, "$1.m.");
 const reservationState = (item: KitchenReservation): ReservationState =>
   item.status !== "reservado" || item.fulfillmentStatus === "no_show"
     ? "cancelled"
@@ -145,6 +172,10 @@ type Data = {
     bookingTimeline: { offerId: string; hour: string; units: number }[];
     totalOrders: number;
   };
+};
+type KitchenPayload = Omit<Data, "analytics"> & { analytics: Data["analytics"] | null };
+const emptyAnalytics: Data["analytics"] = {
+  offers: [], bookingHours: [], bookingTimeline: [], totalOrders: 0,
 };
 export type KitchenSection =
   "inicio" | "menu" | "platos" | "estadisticas" | "cuenta";
@@ -841,6 +872,8 @@ function KitchenReservationPanel({
   const [students, setStudents] = useState<
     { id: string; name: string; email: string }[]
   >([]);
+  const [studentTotal, setStudentTotal] = useState(0);
+  const [studentPage, setStudentPage] = useState(0);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [refreshStudents, setRefreshStudents] = useState(0);
   const [busyOrder, setBusyOrder] = useState("");
@@ -852,24 +885,35 @@ function KitchenReservationPanel({
     orderItemId: number;
     name: string;
     extraordinary: boolean;
+    editing: boolean;
     maxQuantity: number;
   } | null>(null);
   const [promptMethod, setPromptMethod] = useState("");
   const [promptQuantity, setPromptQuantity] = useState("1");
+  const [promptDeliveredAt, setPromptDeliveredAt] = useState("");
   const [promptError, setPromptError] = useState("");
   const paymentDialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (paymentPrompt) paymentDialogRef.current?.showModal();
   }, [paymentPrompt]);
   useEffect(() => {
+    if (search.trim().length < 2) {
+      setStudents([]);
+      setStudentTotal(0);
+      setLoadingStudents(false);
+      return;
+    }
     let active = true;
     const timer = window.setTimeout(async () => {
       setLoadingStudents(true);
       try {
-        const result = await request<{ students: typeof students }>(
-          `${apiPrefix}/offers/${offer.id}/students?q=${encodeURIComponent(search)}`,
+        const result = await request<{ students: typeof students; total: number }>(
+          `${apiPrefix}/offers/${offer.id}/students?q=${encodeURIComponent(search.trim())}&limit=20&offset=${studentPage * 20}`,
         );
-        if (active) setStudents(result.students);
+        if (active) {
+          setStudents(result.students);
+          setStudentTotal(result.total);
+        }
       } catch (cause) {
         if (active)
           setError(
@@ -885,13 +929,14 @@ function KitchenReservationPanel({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [apiPrefix, offer.id, search, reservations, refreshStudents]);
+  }, [apiPrefix, offer.id, search, studentPage, refreshStudents]);
   async function change(path: string, payload: unknown, key: string) {
     setBusyOrder(key);
     setError("");
     try {
       await request(path, payload);
       await onChanged();
+      setRefreshStudents((value) => value + 1);
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -916,15 +961,18 @@ function KitchenReservationPanel({
         quantity: 1,
       });
       await onChanged();
+      setRefreshStudents((value) => value + 1);
       if (added.extraordinary) {
         setPromptMethod("");
         setPromptQuantity("1");
+        setPromptDeliveredAt(limaDeliveryInput(new Date().toISOString()));
         setPromptError("");
         setPaymentPrompt({
           orderId: added.orderId,
           orderItemId: added.orderItemId,
           name: student.name,
           extraordinary: true,
+          editing: false,
           maxQuantity: offer.capacity - offer.reservedCount,
         });
       }
@@ -942,12 +990,19 @@ function KitchenReservationPanel({
     const currentQuantity = item.deliveredQuantity ?? item.quantity;
     setPromptMethod(item.paymentRecorded || "");
     setPromptQuantity(String(currentQuantity));
+    setPromptDeliveredAt(
+      limaDeliveryInput(item.deliveredAt || new Date().toISOString()),
+    );
     setPromptError("");
     setPaymentPrompt({
       orderId: item.orderId,
       orderItemId: item.orderItemId,
       name: item.studentName,
-      extraordinary: false,
+      extraordinary:
+        item.manualAdded &&
+        new Date(item.createdAt).getTime() >=
+          new Date(`${offer.date}T${offer.pickupUntil}:00-05:00`).getTime(),
+      editing: item.fulfillmentStatus === "delivered",
       maxQuantity: Math.max(
         1,
         offer.capacity - offer.reservedCount + currentQuantity,
@@ -960,7 +1015,8 @@ function KitchenReservationPanel({
       !promptMethod ||
       !Number.isInteger(Number(promptQuantity)) ||
       Number(promptQuantity) < 1 ||
-      Number(promptQuantity) > paymentPrompt.maxQuantity
+      Number(promptQuantity) > paymentPrompt.maxQuantity ||
+      (apiPrefix === "/api/admin" && !promptDeliveredAt)
     )
       return;
     setBusyOrder(paymentPrompt.orderId);
@@ -972,6 +1028,9 @@ function KitchenReservationPanel({
         action: "deliver",
         paymentMethod: promptMethod,
         deliveredQuantity: Number(promptQuantity),
+        ...(apiPrefix === "/api/admin"
+          ? { deliveredAt: promptDeliveredAt }
+          : {}),
       });
       await onChanged();
       paymentDialogRef.current?.close();
@@ -1113,7 +1172,27 @@ function KitchenReservationPanel({
                   </div>
                   <div className="km-reservation-manage">
                     <span className="km-reservation-state">{state}</span>
+                    {apiPrefix === "/api/admin" &&
+                      item.fulfillmentStatus === "delivered" &&
+                      item.status === "reservado" && (
+                        <small className="km-delivery-time">
+                          Entrega: {item.deliveredAt
+                            ? deliveredAtLabel(item.deliveredAt)
+                            : "sin fecha registrada"}
+                        </small>
+                      )}
                     <div className="km-reservation-actions">
+                      {apiPrefix === "/api/admin" &&
+                        item.status === "reservado" &&
+                        item.fulfillmentStatus === "delivered" && (
+                          <Button
+                            variant="secondary"
+                            disabled={!!busyOrder}
+                            onClick={() => openDeliveryPrompt(item)}
+                          >
+                            Editar entrega
+                          </Button>
+                        )}
                       {item.status === "reservado" &&
                         item.fulfillmentStatus !== "delivered" &&
                         item.fulfillmentStatus !== "no_show" && (
@@ -1250,21 +1329,26 @@ function KitchenReservationPanel({
                 <input
                   type="search"
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                    setStudentPage(0);
+                  }}
                   placeholder="Nombre o correo UTEC"
                 />
               </label>
               <Button
                 type="button"
                 variant="secondary"
-                disabled={loadingStudents}
+                disabled={loadingStudents || search.trim().length < 2}
                 onClick={() => setRefreshStudents((value) => value + 1)}
               >
                 {loadingStudents ? "Actualizando…" : "Actualizar estudiantes"}
               </Button>
             </div>
             <div className="km-candidate-list" aria-live="polite">
-              {loadingStudents ? (
+              {search.trim().length < 2 ? (
+                <p>Escribe al menos dos caracteres para buscar estudiantes.</p>
+              ) : loadingStudents ? (
                 <p>Buscando estudiantes…</p>
               ) : students.length ? (
                 students.map((student) => (
@@ -1286,6 +1370,17 @@ function KitchenReservationPanel({
                 <p>No hay estudiantes disponibles con esa búsqueda.</p>
               )}
             </div>
+            {studentTotal > 20 && (
+              <nav className="km-candidate-pages" aria-label="Páginas de estudiantes">
+                <Button type="button" variant="secondary"
+                  disabled={studentPage === 0 || loadingStudents}
+                  onClick={() => setStudentPage((page) => page - 1)}>Anterior</Button>
+                <span>{studentPage + 1} de {Math.ceil(studentTotal / 20)}</span>
+                <Button type="button" variant="secondary"
+                  disabled={(studentPage + 1) * 20 >= studentTotal || loadingStudents}
+                  onClick={() => setStudentPage((page) => page + 1)}>Siguiente</Button>
+              </nav>
+            )}
           </>
         ) : (
           <p className="km-hint">
@@ -1304,10 +1399,36 @@ function KitchenReservationPanel({
             ? "RESERVA EXTRAORDINARIA"
             : "ENTREGA DEL PEDIDO"}
         </span>
-        <h2 id="km-payment-title">Confirma la entrega</h2>
+        <h2 id="km-payment-title">
+          {paymentPrompt?.editing ? "Editar entrega" : "Confirma la entrega"}
+        </h2>
         <p>
-          Registra las porciones entregadas a {paymentPrompt?.name} y cómo pagó.
+          {paymentPrompt?.editing ? "Corrige" : "Registra"} las porciones
+          entregadas a {paymentPrompt?.name} y cómo pagó.
         </p>
+        {apiPrefix === "/api/admin" && (
+          <label className="km-delivery-time-field" htmlFor="km-delivered-at">
+            Fecha y hora de entrega
+            <input
+              id="km-delivered-at"
+              type="datetime-local"
+              step="60"
+              min={
+                paymentPrompt?.extraordinary
+                  ? `${offer.date}T${offer.pickupUntil}`
+                  : undefined
+              }
+              max={limaDeliveryInput(new Date().toISOString())}
+              value={promptDeliveredAt}
+              onChange={(event) => setPromptDeliveredAt(event.target.value)}
+            />
+            <small>
+              {paymentPrompt?.extraordinary
+                ? "Hora de Lima. En altas extemporáneas, la reserva toma esta misma hora y no puede ser anterior al fin de recojo."
+                : "Hora de Lima. Puedes corregirla después de entregar."}
+            </small>
+          </label>
+        )}
         <div className="km-delivered-quantity">
           <KitchenSelect
             id="km-delivered-quantity"
@@ -1359,7 +1480,12 @@ function KitchenReservationPanel({
               !promptQuantity ||
               !Number.isInteger(Number(promptQuantity)) ||
               Number(promptQuantity) < 1 ||
-              Number(promptQuantity) > (paymentPrompt?.maxQuantity ?? 1)
+              Number(promptQuantity) > (paymentPrompt?.maxQuantity ?? 1) ||
+              (apiPrefix === "/api/admin" &&
+                (!promptDeliveredAt ||
+                  (paymentPrompt?.extraordinary &&
+                    promptDeliveredAt <
+                      `${offer.date}T${offer.pickupUntil}`)))
             }
           >
             {busyOrder ? "Guardando…" : "Guardar entrega"}
@@ -2054,12 +2180,10 @@ export default function KitchenDashboard({
   section,
   user,
   onLogout,
-  onChanged,
 }: {
   section: KitchenSection;
   user: User;
   onLogout: () => Promise<void>;
-  onChanged: () => Promise<void>;
 }) {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState("");
@@ -2076,33 +2200,48 @@ export default function KitchenDashboard({
   const [week, setWeek] = useState(0);
   const [photoBusy, setPhotoBusy] = useState(false);
   const dishPhotoInputRef = useRef<HTMLInputElement>(null);
-  const refresh = async () => {
+  const refresh = async (force = true) => {
     setError("");
-    const next = await request<Data>("/api/kitchen/data");
-    setData(next);
-    await onChanged();
+    if (force) invalidateCache(`kitchen:data:${user.kitchenId}:`);
+    const scope = section === "estadisticas" ? "full" : "operations";
+    const next = await cachedRequest(
+      `kitchen:data:${user.kitchenId}:${scope}`,
+      () => request<KitchenPayload>(
+        `/api/kitchen/data${scope === "operations" ? "?scope=operations" : ""}`),
+      45_000, force,
+    );
+    setData((current) => ({
+      ...next, analytics: next.analytics ?? current?.analytics ?? emptyAnalytics,
+    }));
   };
   useEffect(() => {
-    refresh().catch((cause) =>
+    refresh(false).catch((cause) =>
       setError(
         cause instanceof Error ? cause.message : "No pudimos cargar tu cocina.",
       ),
     );
   }, [user.kitchenId]);
   useEffect(() => {
+    refresh(false).catch(() => {});
+  }, [section]);
+  useEffect(() => {
+    if (section !== "inicio" && section !== "menu") return;
     const update = () => {
       if (!document.hidden)
-        request<Data>("/api/kitchen/data")
-          .then(setData)
+        cachedRequest(`kitchen:data:${user.kitchenId}:operations`,
+          () => request<KitchenPayload>("/api/kitchen/data?scope=operations"), 45_000, true)
+          .then((next) => setData((current) => ({
+            ...next, analytics: current?.analytics ?? emptyAnalytics,
+          })))
           .catch(() => {});
     };
-    const timer = window.setInterval(update, 30_000);
+    const timer = window.setInterval(update, 45_000);
     document.addEventListener("visibilitychange", update);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
     };
-  }, [user.kitchenId]);
+  }, [user.kitchenId, section]);
   const save = async (path: string, payload: unknown, done: () => void) => {
     setBusy(true);
     setError("");
@@ -2899,6 +3038,10 @@ type AdminData = {
   weekStart: string;
   offers: AdminOffer[];
   reservations: KitchenReservation[];
+  kitchens: { id: string; name: string }[];
+  totalOffers: number;
+  limit: number;
+  offset: number;
 };
 
 function AdminOfferRow({
@@ -3017,60 +3160,51 @@ function AdminOfferRow({
 export function AdminDashboard({
   user,
   onLogout,
-  onChanged,
 }: {
   user: User;
   onLogout: () => Promise<void>;
-  onChanged: () => Promise<void>;
 }) {
   const [data, setData] = useState<AdminData | null>(null);
   const [error, setError] = useState("");
   const [week, setWeek] = useState(0);
   const [kitchen, setKitchen] = useState("all");
+  const [adminPage, setAdminPage] = useState(0);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const refresh = async () => {
-    const next = await request<AdminData>("/api/admin/data");
+  const adminQuery = `/api/admin/data?week=${week}&kitchen=${encodeURIComponent(kitchen)}&limit=10&offset=${adminPage * 10}`;
+  const refresh = async (force = true) => {
+    if (force) invalidateCache("admin:data:");
+    const next = await cachedRequest(`admin:data:${adminQuery}`,
+      () => request<AdminData>(adminQuery), 30_000, force);
     setData(next);
     setError("");
-    await onChanged();
   };
   useEffect(() => {
-    refresh().catch((cause) =>
+    refresh(false).catch((cause) =>
       setError(
         cause instanceof Error
           ? cause.message
           : "No pudimos cargar los pedidos.",
       ),
     );
-  }, [user.id]);
+  }, [user.id, week, kitchen, adminPage]);
   useEffect(() => {
     const update = () => {
       if (!document.hidden)
-        request<AdminData>("/api/admin/data")
+        cachedRequest(`admin:data:${adminQuery}`, () => request<AdminData>(adminQuery), 30_000, true)
           .then(setData)
           .catch(() => {});
     };
-    const timer = window.setInterval(update, 30_000);
+    const timer = window.setInterval(update, 45_000);
     document.addEventListener("visibilitychange", update);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
     };
-  }, [user.id]);
-  const kitchens = Array.from(
-    new Map(
-      data?.offers.map((offer) => [offer.kitchenId, offer.kitchenName]),
-    ).entries(),
-  ).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [user.id, adminQuery]);
+  const kitchens = data?.kitchens || [];
   const start = data ? weekDate(data.weekStart, week * 7) : "";
   const end = data ? weekDate(data.weekStart, week * 7 + 5) : "";
-  const visible =
-    data?.offers.filter(
-      (offer) =>
-        offer.date >= start &&
-        offer.date <= end &&
-        (kitchen === "all" || offer.kitchenId === kitchen),
-    ) || [];
+  const visible = data?.offers || [];
   return (
     <section
       className="page-section admin-dashboard"
@@ -3105,6 +3239,7 @@ export function AdminDashboard({
                   className={week === 0 ? "active" : ""}
                   onClick={() => {
                     setWeek(0);
+                    setAdminPage(0);
                     setExpanded(null);
                   }}
                 >
@@ -3115,6 +3250,7 @@ export function AdminDashboard({
                   className={week === 1 ? "active" : ""}
                   onClick={() => {
                     setWeek(1);
+                    setAdminPage(0);
                     setExpanded(null);
                   }}
                 >
@@ -3132,11 +3268,12 @@ export function AdminDashboard({
                 value={kitchen}
                 onChange={(event) => {
                   setKitchen(event.target.value);
+                  setAdminPage(0);
                   setExpanded(null);
                 }}
               >
                 <option value="all">Todas las cocinas</option>
-                {kitchens.map(([id, name]) => (
+                {kitchens.map(({ id, name }) => (
                   <option value={id} key={id}>
                     {name}
                   </option>
@@ -3160,7 +3297,7 @@ export function AdminDashboard({
             </Button>
           </div>
           <p className="admin-summary">
-            {visible.length} {visible.length === 1 ? "menú" : "menús"} ·{" "}
+            {data.totalOffers} {data.totalOffers === 1 ? "menú" : "menús"} en esta selección ·{" "}
             {visible.reduce(
               (sum, offer) =>
                 sum +
@@ -3172,7 +3309,7 @@ export function AdminDashboard({
                 ).length,
               0,
             )}{" "}
-            pedidos activos
+            pedidos activos en esta página
           </p>
           {visible.length ? (
             visible.map((offer) => (
@@ -3195,6 +3332,16 @@ export function AdminDashboard({
             <p className="km-empty">
               No hay menús de esta cocina en la semana seleccionada.
             </p>
+          )}
+          {data.totalOffers > 10 && (
+            <nav className="km-pagination" aria-label="Páginas de menús en Admin">
+              <Button type="button" variant="secondary" disabled={adminPage === 0}
+                onClick={() => { setAdminPage((page) => page - 1); setExpanded(null); }}>Anterior</Button>
+              <span>Página {adminPage + 1} de {Math.ceil(data.totalOffers / 10)}</span>
+              <Button type="button" variant="secondary"
+                disabled={(adminPage + 1) * 10 >= data.totalOffers}
+                onClick={() => { setAdminPage((page) => page + 1); setExpanded(null); }}>Siguiente</Button>
+            </nav>
           )}
         </div>
       )}

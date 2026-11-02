@@ -332,6 +332,27 @@ if (!process.env.MENUU_TEST_DB_PATH) {
 
       assert.equal(bootstrap.status, 200);
       assert.equal((await bootstrap.json()).user.email, "nueva@utec.edu.pe");
+      const sessionResponse = await fetch(`${base}/api/session`, {
+        headers: { Cookie: cookie },
+      });
+      assert.equal((await sessionResponse.json()).user.email, "nueva@utec.edu.pe");
+      const catalogResponse = await fetch(`${base}/api/catalog`);
+      assert.equal(catalogResponse.status, 200);
+      assert.match(catalogResponse.headers.get("cache-control"), /s-maxage=30/);
+      assert.equal((await catalogResponse.json()).offerings.length, 2);
+      assert.equal((await fetch(`${base}/api/orders`)).status, 401);
+      assert.equal((await fetch(`${base}/api/orders?limit=0`, {
+        headers: { Cookie: cookie },
+      })).status, 400);
+      const consumerToken = "c".repeat(64);
+      await insertSession(consumerToken, consumers[0].id);
+      const ordersPageResponse = await fetch(`${base}/api/orders?limit=1&offset=0`, {
+        headers: { Cookie: `menuu_session=${consumerToken}` },
+      });
+      const ordersPage = await ordersPageResponse.json();
+      assert.equal(ordersPageResponse.status, 200);
+      assert.equal(ordersPage.orders.length, 1);
+      assert.ok(ordersPage.total >= 1);
       const preRegistered = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -472,10 +493,19 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         headers: { Cookie: adminCookie },
       });
       assert.equal(allOffers.status, 200);
+      const allAdminData = await allOffers.json();
       assert.deepEqual(
-        new Set((await allOffers.json()).offers.map((item) => item.kitchenId)),
+        new Set(allAdminData.offers.map((item) => item.kitchenId)),
         new Set(["test-kitchen", "second-kitchen"]),
       );
+      const adminPageResponse = await fetch(`${base}/api/admin/data?week=1&limit=1&offset=0`, {
+        headers: { Cookie: adminCookie },
+      });
+      const adminPage = await adminPageResponse.json();
+      assert.equal(adminPageResponse.status, 200);
+      assert.equal(adminPage.offers.length, 1);
+      assert.ok(adminPage.totalOffers >= 2);
+      assert.equal(adminPage.kitchens.length, 2);
       assert.equal(
         (await kitchenData("test-kitchen")).offers.some(
           (item) => item.id === secondOffer,
@@ -506,7 +536,9 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         `${base}/api/admin/offers/${secondOffer}/students?q=fresh%40`,
         { headers: { Cookie: adminCookie } },
       );
-      assert.equal((await afterStudent.json()).students[0].id, freshUser.id);
+      const candidatePage = await afterStudent.json();
+      assert.equal(candidatePage.students[0].id, freshUser.id);
+      assert.equal(candidatePage.total, 1);
       assert.equal(
         (
           await kitchenStudentCandidates("test-kitchen", offerId, "fresh@")
@@ -570,10 +602,15 @@ if (!process.env.MENUU_TEST_DB_PATH) {
             ).rows[0].id,
             deliveredQuantity: 1,
             paymentMethod: "QR",
+            deliveredAt: "2024-01-02T13:05",
           }),
         },
       );
       assert.equal(adminDelivered.status, 200);
+      assert.equal(
+        (await db.query("SELECT delivered_at FROM orders WHERE id=$1", [adminOrderId])).rows[0].delivered_at,
+        "2024-01-02T18:05:00.000Z",
+      );
       assert.equal(
         (
           await db.query(
@@ -647,7 +684,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
         { status: 409 },
       );
-      await updateKitchenReservation("test-kitchen", "kitchen-actor", {
+      await updateKitchenReservation("test-kitchen", "admin-actor", {
         orderId: manual.orderId,
         orderItemId: manual.orderItemId,
         action: "deliver",
@@ -674,6 +711,35 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       );
       assert.equal(manualOrder.fulfillmentStatus, "delivered");
       assert.equal(manualOrder.payment, "Efectivo");
+      const ordinaryCreatedAt = (
+        await db.query("SELECT created_at FROM orders WHERE id=$1", [manual.orderId])
+      ).rows[0].created_at;
+      await assert.rejects(
+        updateKitchenReservation("test-kitchen", "kitchen-actor", {
+          orderId: manual.orderId,
+          orderItemId: manual.orderItemId,
+          action: "deliver",
+          deliveredQuantity: 1,
+          paymentMethod: "Efectivo",
+          deliveredAt: "2024-01-02T13:05",
+        }),
+        { status: 403 },
+      );
+      await updateKitchenReservation("test-kitchen", "kitchen-actor", {
+        orderId: manual.orderId,
+        orderItemId: manual.orderItemId,
+        action: "deliver",
+        deliveredQuantity: 1,
+        paymentMethod: "Efectivo",
+        deliveredAt: "2024-01-02T13:05",
+      }, true);
+      assert.deepEqual(
+        (await db.query(
+          'SELECT created_at AS "createdAt",delivered_at AS "deliveredAt" FROM orders WHERE id=$1',
+          [manual.orderId],
+        )).rows[0],
+        { createdAt: ordinaryCreatedAt, deliveredAt: "2024-01-02T18:05:00.000Z" },
+      );
       await assert.rejects(
         updateKitchenReservation("test-kitchen", "kitchen-actor", {
           orderId: manual.orderId,
@@ -814,6 +880,10 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       );
       assert.equal(extraordinary.extraordinary, true);
       assert.equal(extraordinaryOrder.fulfillmentStatus, "delivered");
+      assert.equal(
+        (await db.query("SELECT delivered_at FROM orders WHERE id=$1", [extraordinary.orderId])).rows[0].delivered_at,
+        extraordinaryOrder.createdAt,
+      );
       assert.ok(
         new Date(extraordinaryOrder.createdAt).getTime() >
           new Date(
@@ -846,6 +916,32 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           )
         ).rows[0].action,
         "manual_add",
+      );
+      await assert.rejects(
+        updateKitchenReservation("test-kitchen", "admin-actor", {
+          orderId: extraordinary.orderId,
+          orderItemId: extraordinary.orderItemId,
+          action: "deliver",
+          deliveredQuantity: 1,
+          paymentMethod: "Efectivo",
+          deliveredAt: "2020-01-01T13:09",
+        }, true),
+        /no puede ser anterior al fin de recojo/,
+      );
+      await updateKitchenReservation("test-kitchen", "admin-actor", {
+        orderId: extraordinary.orderId,
+        orderItemId: extraordinary.orderItemId,
+        action: "deliver",
+        deliveredQuantity: 1,
+        paymentMethod: "Efectivo",
+        deliveredAt: "2020-01-01T13:20",
+      }, true);
+      assert.deepEqual(
+        (await db.query(
+          'SELECT created_at AS "createdAt",delivered_at AS "deliveredAt" FROM orders WHERE id=$1',
+          [extraordinary.orderId],
+        )).rows[0],
+        { createdAt: "2020-01-01T18:20:00.000Z", deliveredAt: "2020-01-01T18:20:00.000Z" },
       );
       await assert.rejects(
         updateKitchenReservation("test-kitchen", "kitchen-actor", {
@@ -965,6 +1061,13 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         headers: { Cookie: `menuu_session=${kitchenToken}` },
       });
       assert.equal(kitchenAfterCorrection.status, 200);
+      const kitchenOperations = await fetch(`${base}/api/kitchen/data?scope=operations`, {
+        headers: { Cookie: `menuu_session=${kitchenToken}` },
+      });
+      assert.equal(kitchenOperations.status, 200);
+      const operations = await kitchenOperations.json();
+      assert.equal(operations.analytics, null);
+      assert.ok(operations.offers.some((item) => item.id === concurrentOffer));
       const afterCorrection = await fetch(`${base}/api/bootstrap`);
       assert.equal(afterCorrection.status, 200);
       assert.equal(

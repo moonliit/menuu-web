@@ -65,6 +65,10 @@ import KitchenDashboard, {
 } from "./KitchenDashboard";
 import { CustomizationDialog } from "./components/CustomizationDialog";
 import { InstallPrompt } from "./components/InstallPrompt";
+import { cachedRequest, cachedValue, invalidateCache } from "./data/queryCache";
+
+type SessionData = Pick<Bootstrap, "user" | "careers">;
+type OrdersPage = { orders: Order[]; total: number; limit: number; offset: number };
 
 type Page =
   | "inicio"
@@ -259,6 +263,14 @@ const limaToday = () => {
   const value = (type: string) =>
     parts.find((part) => part.type === type)?.value || "";
   return `${value("year")}-${value("month")}-${value("day")}`;
+};
+const emptyCatalog = (): Bootstrap["catalog"] => {
+  const today = limaToday();
+  const start = weekDate(today, -(limaDayIndex() ?? 6));
+  return {
+    kitchens: [], offerings: [], sales: [], weeklyDishSales: [],
+    weeks: [start, weekDate(start, 7)],
+  };
 };
 const offerPrice = (offer: Offering, choices: SelectedChoices) =>
   offer.priceSoles +
@@ -1542,6 +1554,12 @@ export default function App() {
     kitchenFromHash(window.location.hash),
   );
   const [state, setState] = useState<Bootstrap | null>(null);
+  const [catalogReady, setCatalogReady] = useState(false);
+  const [ordersPage, setOrdersPage] = useState(0);
+  const [ordersTotal, setOrdersTotal] = useState(0);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
+  const ordersRequestRef = useRef(0);
   const [loadError, setLoadError] = useState("");
   const [week, setWeek] = useState(0);
   const [dayFilter, setDayFilter] = useState<number | null>(() =>
@@ -1561,19 +1579,91 @@ export default function App() {
   const [bookingError, setBookingError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
 
-  async function refresh() {
-    const data = await api<Bootstrap>("/api/bootstrap");
-    setState(data);
+  async function refresh(force = true) {
+    const session = await cachedRequest(
+      "session", () => api<SessionData>("/api/session"), 300_000, force);
+    const needsCatalog = ![
+      "cuenta", "pedidos", "cocina", "cocinaInicio", "cocinaMenu",
+      "cocinaPlatos", "cocinaEstadisticas", "cocinaCuenta", "admin", "adminPedidos",
+    ].includes(page) && session.user?.role !== "kitchen" && session.user?.role !== "admin";
+    const catalog = needsCatalog
+      ? await cachedRequest("catalog", () => api<Bootstrap["catalog"]>("/api/catalog"), 60_000, force)
+      : cachedValue<Bootstrap["catalog"]>("catalog") || emptyCatalog();
+    if (needsCatalog || cachedValue("catalog")) setCatalogReady(true);
+    setState((current) => ({
+      ...session,
+      catalog,
+      orders: current?.user?.id === session.user?.id ? current?.orders || [] : [],
+    }));
+    if (!session.user || session.user.role !== "consumer") {
+      ordersRequestRef.current += 1;
+      setOrdersLoaded(false);
+      setOrdersLoading(false);
+      setOrdersPage(0);
+      setOrdersTotal(0);
+      invalidateCache("orders:");
+    }
     setLoadError("");
     setSelected((current) =>
       current
-        ? data.catalog.offerings.find((offer) => offer.id === current.id) ||
+        ? catalog.offerings.find((offer) => offer.id === current.id) ||
           null
         : null,
     );
   }
+  async function refreshCatalog(force = false, freshServer = false) {
+    if (freshServer) invalidateCache("catalog");
+    const catalog = await cachedRequest(
+      "catalog", () => api<Bootstrap["catalog"]>(freshServer ? "/api/catalog?fresh=1" : "/api/catalog"), 60_000, force,
+    );
+    setState((current) => current ? { ...current, catalog } : current);
+    setCatalogReady(true);
+    setSelected((current) => current
+      ? catalog.offerings.find((offer) => offer.id === current.id) || null
+      : null);
+    return catalog;
+  }
+  async function refreshSession() {
+    invalidateCache("session");
+    const session = await cachedRequest(
+      "session", () => api<SessionData>("/api/session"), 300_000, true,
+    );
+    setState((current) => current ? {
+      ...current, ...session,
+      orders: current.user?.id === session.user?.id ? current.orders : [],
+    } : current);
+    if (!session.user || session.user.role !== "consumer") {
+      ordersRequestRef.current += 1;
+      invalidateCache("orders:");
+      setOrdersLoaded(false);
+      setOrdersLoading(false);
+      setOrdersPage(0);
+      setOrdersTotal(0);
+    }
+    return session;
+  }
+  async function loadOrders(targetPage = ordersPage, force = false) {
+    const user = state?.user;
+    if (!user || user.role !== "consumer") return;
+    const requestId = ++ordersRequestRef.current;
+    const key = `orders:${user.id}:${targetPage}`;
+    const cached = cachedValue<OrdersPage>(key);
+    if (!cached) setOrdersLoading(true);
+    try {
+      const result = await cachedRequest(key,
+        () => api<OrdersPage>(`/api/orders?limit=10&offset=${targetPage * 10}`),
+        30_000, force);
+      if (requestId !== ordersRequestRef.current) return;
+      setState((current) => current?.user?.id === user.id
+        ? { ...current, orders: result.orders } : current);
+      setOrdersTotal(result.total);
+      setOrdersLoaded(true);
+    } finally {
+      if (requestId === ordersRequestRef.current) setOrdersLoading(false);
+    }
+  }
   useEffect(() => {
-    refresh().catch((cause) =>
+    refresh(false).catch((cause) =>
       setLoadError(
         cause instanceof Error ? cause.message : "No pudimos cargar el menú.",
       ),
@@ -1581,19 +1671,38 @@ export default function App() {
   }, []);
   useEffect(() => {
     const update = () => {
-      if (!document.hidden) refresh().catch(() => {});
+      if (!document.hidden && ["inicio", "buscar", "carrito"].includes(page))
+        refreshCatalog().catch(() => {});
     };
-    if (page === "carrito") update();
-    const timer = window.setInterval(
-      update,
-      page === "carrito" ? 10_000 : 30_000,
-    );
+    update();
+    const timer = ["inicio", "buscar", "carrito"].includes(page)
+      ? window.setInterval(() => {
+          if (!document.hidden) refreshCatalog(true, page === "carrito").catch(() => {});
+        }, page === "carrito" ? 15_000 : 60_000)
+      : null;
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      if (timer !== null) window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [page]);
+  useEffect(() => {
+    if (page !== "pedidos" || state?.user?.role !== "consumer") return;
+    loadOrders(ordersPage).catch((cause) =>
+      setLoadError(cause instanceof Error ? cause.message : "No pudimos cargar tus pedidos."));
+  }, [page, state?.user?.id, ordersPage]);
+  useEffect(() => {
+    if (page !== "pedidos" || state?.user?.role !== "consumer") return;
+    const update = () => {
+      if (!document.hidden) loadOrders(ordersPage, true).catch(() => {});
+    };
+    const timer = window.setInterval(update, 45_000);
     document.addEventListener("visibilitychange", update);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
     };
-  }, [page]);
+  }, [page, state?.user?.id, ordersPage]);
   useEffect(() => {
     const syncRoute = () => {
       setPage(pageFromHash(window.location.hash));
@@ -1965,11 +2074,10 @@ export default function App() {
     setBookingError("");
     bookingKeyRef.current ??= window.crypto.randomUUID();
     try {
-      const latest = await api<Bootstrap>("/api/bootstrap");
-      setState(latest);
+      const latest = await refreshCatalog(true, true);
       if (
         cartRows.some(({ item }) => {
-          const offer = latest.catalog.offerings.find(
+          const offer = latest.offerings.find(
             (current) => current.id === item.offeringId,
           );
           return !offer?.bookable || offer.remaining < item.quantity;
@@ -1997,9 +2105,12 @@ export default function App() {
           quantity: item.quantity,
         })),
       });
-      await refresh();
       bookingKeyRef.current = null;
       setCart([]);
+      invalidateCache("orders:");
+      setOrdersLoaded(false);
+      setOrdersPage(0);
+      await refreshCatalog(true, true);
       go("pedidos");
       setNotice("Reserva confirmada");
       window.setTimeout(() => setNotice(""), 4000);
@@ -2009,24 +2120,30 @@ export default function App() {
           ? cause.message
           : "No pudimos confirmar la reserva.",
       );
-      await refresh().catch(() => {});
+      await refreshCatalog(true, true).catch(() => {});
     } finally {
       setBooking(false);
     }
   }
   async function logout() {
     await api("/api/auth/logout", {});
-    await refresh();
+    invalidateCache();
+    setCatalogReady(false);
+    await refreshSession();
     go("inicio");
   }
   async function kitchenLogout() {
     await api("/api/auth/logout", {});
-    await refresh();
+    invalidateCache();
+    setCatalogReady(false);
+    await refreshSession();
     go("cocina");
   }
   async function adminLogout() {
     await api("/api/auth/logout", {});
-    await refresh();
+    invalidateCache();
+    setCatalogReady(false);
+    await refreshSession();
     go("admin");
   }
 
@@ -2167,6 +2284,9 @@ export default function App() {
             Cargando Menúu…
           </div>
         )}
+        {state && !catalogReady && ["inicio", "buscar", "carrito"].includes(page) && (
+          <div className="loading-state" role="status">Cargando menús…</div>
+        )}
         {state &&
           kitchenArea &&
           (kitchenSession ? (
@@ -2174,10 +2294,9 @@ export default function App() {
               section={kitchenSection}
               user={state.user!}
               onLogout={kitchenLogout}
-              onChanged={refresh}
             />
           ) : (
-            <KitchenAccess onAuthenticated={refresh} />
+            <KitchenAccess onAuthenticated={async () => { await refreshSession(); }} />
           ))}
         {state &&
           adminArea &&
@@ -2185,12 +2304,11 @@ export default function App() {
             <AdminDashboard
               user={state.user!}
               onLogout={adminLogout}
-              onChanged={refresh}
             />
           ) : (
-            <KitchenAccess role="admin" onAuthenticated={refresh} />
+            <KitchenAccess role="admin" onAuthenticated={async () => { await refreshSession(); }} />
           ))}
-        {state && !kitchenSession && !adminSession && page === "inicio" && (
+        {state && catalogReady && !kitchenSession && !adminSession && page === "inicio" && (
           <>
             <div className="location-line">
               <BrandLocationIcon size={22} />
@@ -2314,7 +2432,7 @@ export default function App() {
             )}
           </>
         )}
-        {state && !kitchenSession && !adminSession && page === "buscar" && (
+        {state && catalogReady && !kitchenSession && !adminSession && page === "buscar" && (
           <section className="page-section">
             <div className="page-heading">
               <span className="eyebrow">ELIGE TU ANTOJO</span>
@@ -2362,7 +2480,7 @@ export default function App() {
             )}
           </section>
         )}
-        {state && !kitchenSession && !adminSession && page === "carrito" && (
+        {state && catalogReady && !kitchenSession && !adminSession && page === "carrito" && (
           <section className="page-section narrow">
             <div className="page-heading">
               <span className="eyebrow">TU PEDIDO</span>
@@ -2463,6 +2581,8 @@ export default function App() {
                   </Button>
                 }
               />
+            ) : !ordersLoaded ? (
+              <p role="status">{ordersLoading ? "Cargando tus pedidos…" : "Actualiza para cargar tus pedidos."}</p>
             ) : state.orders.length === 0 ? (
               <EmptyState
                 icon={<BrandOrdersIcon size={30} />}
@@ -2480,9 +2600,26 @@ export default function App() {
                   <OrderCard
                     key={order.id}
                     order={order}
-                    onReviewed={refresh}
+                    onReviewed={async () => {
+                      invalidateCache("orders:");
+                      await Promise.all([loadOrders(ordersPage, true), refreshCatalog(true, true)]);
+                    }}
                   />
                 ))}
+                {ordersTotal > 10 && (
+                  <nav className="orders-pages" aria-label="Páginas de pedidos">
+                    <Button variant="secondary" disabled={ordersPage === 0 || ordersLoading}
+                      onClick={() => { setOrdersLoaded(false); setOrdersPage(ordersPage - 1); }}>
+                      Anterior
+                    </Button>
+                    <span>Página {ordersPage + 1} de {Math.ceil(ordersTotal / 10)}</span>
+                    <Button variant="secondary"
+                      disabled={(ordersPage + 1) * 10 >= ordersTotal || ordersLoading}
+                      onClick={() => { setOrdersLoaded(false); setOrdersPage(ordersPage + 1); }}>
+                      Siguiente
+                    </Button>
+                  </nav>
+                )}
               </div>
             )}
           </section>
@@ -2498,7 +2635,7 @@ export default function App() {
                 <AccountProfile
                   user={state.user}
                   careers={state.careers}
-                  onSaved={refresh}
+                  onSaved={async () => { await refreshSession(); }}
                   onLogout={logout}
                 />
               </>
@@ -2507,7 +2644,7 @@ export default function App() {
                 careers={state.careers}
                 message={authMessage}
                 onAuthenticated={async () => {
-                  await refresh();
+                  await refreshSession();
                   setAuthMessage("");
                 }}
               />

@@ -209,7 +209,7 @@ async function loadOptions(client, scope, kitchenId) {
   return byParent;
 }
 
-export async function kitchenData(kitchenId) {
+export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
   const db = getDb();
   const start = weekStart();
   const today = todayLima();
@@ -236,24 +236,24 @@ export async function kitchenData(kitchenId) {
       `SELECT id,dish_id AS "dishId",offer_date AS date,delivery_time AS "deliveryTime",pickup_until AS "pickupUntil",booking_deadline_at AS "bookingDeadline",capacity,reserved_count AS "reservedCount",description_override AS "descriptionOverride",price_override_cents AS "priceOverrideCents",customization_override AS "hasCustomizationOverride",published_at AS "publishedAt",sold_out_at AS "soldOutAt" FROM offers WHERE kitchen_id=$1 AND offer_date >= $2 AND offer_date < date($2, '+14 days') ORDER BY offer_date,delivery_time,id`,
       [kitchenId, start],
     ),
-    db.query(
+    includeAnalytics ? db.query(
       `SELECT o.id,o.dish_id AS "dishId",d.name AS "dishName",o.offer_date AS date,o.capacity,o.reserved_count AS "reservedCount",o.published_at AS "publishedAt",o.sold_out_at AS "soldOutAt",COALESCE(sum(i.quantity) FILTER (WHERE r.status='reservado' AND r.fulfillment_status<>'no_show'),0) AS units,COALESCE(sum(i.total_cents) FILTER (WHERE r.status='reservado' AND r.fulfillment_status<>'no_show'),0) AS "revenueCents",count(DISTINCT r.id) FILTER (WHERE r.status='reservado' AND r.fulfillment_status<>'no_show') AS "orderCount",min(r.created_at) FILTER (WHERE r.status='reservado' AND r.fulfillment_status<>'no_show') AS "firstBookingAt" FROM offers o JOIN dishes d ON d.kitchen_id=o.kitchen_id AND d.id=o.dish_id LEFT JOIN order_items i ON i.offer_id=o.id LEFT JOIN orders r ON r.id=i.order_id AND r.created_at >= $2 WHERE o.kitchen_id=$1 AND o.offer_date >= date($3, '-28 days') AND o.offer_date < date($3, '+14 days') GROUP BY o.id,d.name ORDER BY o.offer_date DESC,o.id`,
       [kitchenId, since, today],
-    ),
-    db.query(
+    ) : { rows: [] },
+    includeAnalytics ? db.query(
       `SELECT CAST(strftime('%H',r.created_at,'-5 hours') AS INTEGER) AS hour,sum(i.quantity) AS units FROM orders r JOIN order_items i ON i.order_id=r.id JOIN offers o ON o.id=i.offer_id WHERE o.kitchen_id=$1 AND r.status='reservado' AND r.fulfillment_status<>'no_show' AND r.created_at >= $2 GROUP BY hour ORDER BY hour`,
       [kitchenId, since],
-    ),
-    db.query(
+    ) : { rows: [] },
+    includeAnalytics ? db.query(
       `SELECT i.offer_id AS "offerId",strftime('%Y-%m-%d %H:00',r.created_at,'-5 hours') AS hour,sum(i.quantity) AS units FROM orders r JOIN order_items i ON i.order_id=r.id JOIN offers o ON o.id=i.offer_id WHERE o.kitchen_id=$1 AND r.status='reservado' AND r.fulfillment_status<>'no_show' AND r.created_at >= $2 GROUP BY i.offer_id,hour ORDER BY hour`,
       [kitchenId, since],
-    ),
-    db.query(
+    ) : { rows: [] },
+    includeAnalytics ? db.query(
       `SELECT count(DISTINCT id) AS count FROM orders WHERE kitchen_id=$1 AND status='reservado' AND fulfillment_status<>'no_show' AND created_at >= $2`,
       [kitchenId, since],
-    ),
+    ) : { rows: [{ count: 0 }] },
     db.query(
-      `SELECT i.offer_id AS "offerId",i.id AS "orderItemId",r.id AS "orderId",r.code,u.name AS "studentName",u.email AS "studentEmail",i.quantity,i.delivered_quantity AS "deliveredQuantity",i.booking_deadline_at AS "bookingDeadlineAt",r.status,r.fulfillment_status AS "fulfillmentStatus",r.payment_recorded AS "paymentRecorded",r.created_at AS "createdAt",
+      `SELECT i.offer_id AS "offerId",i.id AS "orderItemId",r.id AS "orderId",r.code,u.name AS "studentName",u.email AS "studentEmail",i.quantity,i.delivered_quantity AS "deliveredQuantity",i.booking_deadline_at AS "bookingDeadlineAt",r.status,r.fulfillment_status AS "fulfillmentStatus",r.payment_recorded AS "paymentRecorded",r.delivered_at AS "deliveredAt",r.created_at AS "createdAt",
          EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_add') AS "manualAdded"
          FROM orders r JOIN order_items i ON i.order_id=r.id JOIN users u ON u.id=r.user_id JOIN offers o ON o.id=i.offer_id
          WHERE r.kitchen_id=$1 AND o.kitchen_id=$1 AND o.offer_date >= $2 AND o.offer_date < date($2, '+14 days')
@@ -282,12 +282,12 @@ export async function kitchenData(kitchenId) {
       customization: offerOptions.get(row.id) || [],
     })),
     reservations: reservations.rows,
-    analytics: {
+    analytics: includeAnalytics ? {
       offers: stats.rows,
       bookingHours: hours.rows,
       bookingTimeline: timeline.rows,
       totalOrders: orders.rows[0].count,
-    },
+    } : null,
   };
 }
 
@@ -297,6 +297,7 @@ export async function kitchenStudentCandidates(
   kitchenId,
   offerId,
   search = "",
+  page = null,
 ) {
   const query = text(search, 80);
   if (query.length > 80) fail("Búsqueda demasiado larga.");
@@ -305,16 +306,20 @@ export async function kitchenStudentCandidates(
     [offerId, kitchenId],
   );
   if (!offer.rowCount) fail("Menú no encontrado.", 404);
-  return (
-    await getDb().query(
-      `SELECT u.id,u.name,u.email FROM users u WHERE u.role='consumer'
+  const where = `FROM users u WHERE u.role='consumer'
        AND (u.name LIKE $2 OR u.email LIKE $2)
        AND NOT EXISTS (SELECT 1 FROM orders r JOIN order_items i ON i.order_id=r.id WHERE r.user_id=u.id AND i.offer_id=$1 AND r.status='reservado' AND r.fulfillment_status<>'no_show')
-       AND NOT EXISTS (SELECT 1 FROM orders r WHERE r.user_id=u.id AND r.status='reservado' AND r.fulfillment_status='no_show')
-       ORDER BY u.name,u.email LIMIT 30`,
-      [offerId, `%${query.replace(/[%_]/g, "")}%`],
+       AND NOT EXISTS (SELECT 1 FROM orders r WHERE r.user_id=u.id AND r.status='reservado' AND r.fulfillment_status='no_show')`;
+  const args = [offerId, `%${query.replace(/[%_]/g, "")}%`];
+  const students = (
+    await getDb().query(
+      `SELECT u.id,u.name,u.email ${where} ORDER BY u.name,u.email LIMIT $3 OFFSET $4`,
+      [...args, page?.limit ?? 30, page?.offset ?? 0],
     )
   ).rows;
+  if (!page) return students;
+  const count = await getDb().query(`SELECT count(*) AS total ${where}`, args);
+  return { students, total: Number(count.rows[0].total) };
 }
 
 export async function addKitchenReservation(kitchenId, actorId, data) {
@@ -374,9 +379,10 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
     const extraordinary =
       Date.now() >=
       new Date(`${offer.date}T${offer.pickupUntil}:00-05:00`).getTime();
+    const createdAt = new Date().toISOString();
     await db.query(
-      `INSERT INTO orders(id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,fulfillment_status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reservado','QR al recibir',$10,$11)`,
+      `INSERT INTO orders(id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,fulfillment_status,created_at,delivered_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reservado','QR al recibir',$10,$11,$12,$13)`,
       [
         orderId,
         `MU-${randomUUID().slice(0, 8).toUpperCase()}`,
@@ -389,6 +395,8 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
         "Entrada del Comedor UTEC en piso 2",
         total,
         extraordinary ? "delivered" : "pending",
+        createdAt,
+        extraordinary ? createdAt : null,
       ],
     );
     const addedItem = await db.query(
@@ -419,15 +427,30 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
   });
 }
 
-export async function updateKitchenReservation(kitchenId, actorId, data) {
+export async function updateKitchenReservation(kitchenId, actorId, data, allowDeliveryTimeEdit = false) {
   const orderId = typeof data?.orderId === "string" ? data.orderId : "";
   const action = data?.action;
   if (!orderId || !["deliver", "cancel", "reset", "payment"].includes(action))
     fail("Cambio de reserva inválido.");
+  if (data?.deliveredAt !== undefined && (!allowDeliveryTimeEdit || action !== "deliver"))
+    fail("Solo admin puede cambiar la fecha de entrega.", 403);
+  let requestedDeliveredAt = null;
+  if (data?.deliveredAt !== undefined) {
+    const value = data.deliveredAt;
+    const [date, time] = typeof value === "string" ? value.split("T") : [];
+    if (!validDate(date) || !validTime(time))
+      fail("Indica una fecha y hora de entrega válidas.");
+    const moment = new Date(`${date}T${time}:00-05:00`);
+    if (moment.getTime() > Date.now())
+      fail("La entrega no puede tener una fecha futura.");
+    requestedDeliveredAt = moment.toISOString();
+  }
   return transaction(async (db) => {
     const order = (
       await db.query(
-        `SELECT id,status,fulfillment_status AS "fulfillmentStatus",offer_date AS date,pickup_until AS "pickupUntil",created_at AS "createdAt" FROM orders WHERE id=$1 AND kitchen_id=$2`,
+        `SELECT id,status,fulfillment_status AS "fulfillmentStatus",delivered_at AS "deliveredAt",offer_date AS date,pickup_until AS "pickupUntil",created_at AS "createdAt",
+         EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=orders.id AND e.action='manual_add') AS "manualAdded"
+         FROM orders WHERE id=$1 AND kitchen_id=$2`,
         [orderId, kitchenId],
       )
     ).rows[0];
@@ -483,6 +506,22 @@ export async function updateKitchenReservation(kitchenId, actorId, data) {
           : action === "cancel"
             ? "no_show"
             : "pending";
+      const deliveredAt =
+        action === "deliver"
+          ? requestedDeliveredAt ||
+            (order.fulfillmentStatus === "delivered" && order.deliveredAt) ||
+            new Date().toISOString()
+          : null;
+      const pickupEnd = new Date(`${order.date}T${order.pickupUntil}:00-05:00`).getTime();
+      const extraordinaryManual =
+        order.manualAdded && new Date(order.createdAt).getTime() >= pickupEnd;
+      if (
+        action === "deliver" &&
+        requestedDeliveredAt &&
+        extraordinaryManual &&
+        new Date(requestedDeliveredAt).getTime() < pickupEnd
+      )
+        fail("La entrega extemporánea no puede ser anterior al fin de recojo.");
       const selectedId = Number(data.orderItemId);
       const selectedItem =
         items.find((item) => item.id === selectedId) ||
@@ -534,11 +573,13 @@ export async function updateKitchenReservation(kitchenId, actorId, data) {
       await db.query(
         `UPDATE orders SET fulfillment_status=$3,pickup_confirmed=0,
          payment_recorded=CASE WHEN $3='delivered' THEN $4 ELSE NULL END,
+         delivered_at=$5,
+         created_at=CASE WHEN $6=1 THEN $5 ELSE created_at END,
          review_enabled=CASE WHEN $3='delivered' THEN review_enabled ELSE 0 END
          WHERE id=$1 AND kitchen_id=$2`,
-        [orderId, kitchenId, fulfillment, action === "deliver" ? data.paymentMethod : null],
+        [orderId, kitchenId, fulfillment, action === "deliver" ? data.paymentMethod : null, deliveredAt, Boolean(requestedDeliveredAt && extraordinaryManual)],
       );
-      detail = action === "deliver" ? `${fulfillment}: ${deliveredQuantity} porción(es), ${data.paymentMethod}` : fulfillment;
+      detail = action === "deliver" ? `${fulfillment}: ${deliveredQuantity} porción(es), ${data.paymentMethod}, ${deliveredAt}` : fulfillment;
     }
     await db.query(
       "INSERT INTO kitchen_reservation_events(id,order_id,actor_user_id,action,detail) VALUES($1,$2,$3,$4,$5)",

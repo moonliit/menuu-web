@@ -2706,6 +2706,18 @@ p {
   display: grid;
   gap: 18px;
 }
+.orders-pages {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--color-muted);
+  font-size: 14px;
+}
+.orders-pages .button {
+  min-height: 44px;
+}
 .order-card {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
