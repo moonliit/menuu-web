@@ -164,6 +164,19 @@ export function weekDate(start: string, dayIndex: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+export function nextBookableDate(
+  offerings: Pick<Offering, "date" | "bookable">[],
+  today: string,
+): string | null {
+  return offerings.reduce<string | null>(
+    (next, offer) =>
+      offer.bookable && offer.date >= today && (!next || offer.date < next)
+        ? offer.date
+        : next,
+    null,
+  );
+}
+
 export function timeLabel(time: string): string {
   const [hour, minute] = time.split(":").map(Number);
   return `${hour % 12 || 12}:${String(minute).padStart(2, "0")}\u00a0${hour >= 12 ? "p.m." : "a.m."}`;

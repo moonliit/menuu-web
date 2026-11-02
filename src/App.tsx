@@ -48,6 +48,7 @@ import {
   dateLabel,
   limaDayIndex,
   money,
+  nextBookableDate,
   pickupWindow,
   weekDate,
   type Bootstrap,
@@ -1546,6 +1547,7 @@ export default function App() {
   const [dayFilter, setDayFilter] = useState<number | null>(() =>
     limaDayIndex(),
   );
+  const [menuFilterManual, setMenuFilterManual] = useState(false);
   const [pickupFilter, setPickupFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Offering | null>(null);
@@ -1596,6 +1598,8 @@ export default function App() {
     const syncRoute = () => {
       setPage(pageFromHash(window.location.hash));
       setKitchenFilter(kitchenFromHash(window.location.hash));
+      if (pageFromHash(window.location.hash) === "buscar")
+        setMenuFilterManual(false);
       setSelected(null);
       window.scrollTo({ top: 0, behavior: "auto" });
     };
@@ -1632,13 +1636,54 @@ export default function App() {
       row.kitchenId,
       (kitchenSales.get(row.kitchenId) || 0) + row.units,
     );
-  const featuredWeek = offers.some(
-    (offer) => offer.week === 0 && offer.bookable,
-  )
-    ? 0
-    : 1;
+  const nextMenuDate = nextBookableDate(offers, limaToday());
+  const menuOffers = kitchenFilter
+    ? offers.filter((offer) => offer.kitchenId === kitchenFilter)
+    : offers;
+  const nextFilteredMenuDate = nextBookableDate(menuOffers, limaToday());
+  const hideCurrentWeek =
+    state !== null &&
+    !menuOffers.some((offer) => offer.week === 0 && offer.bookable);
+  const featuredWeek = offers.find(
+    (offer) => offer.date === nextMenuDate,
+  )?.week ?? 0;
   const featuredWeekName =
     featuredWeek === 0 ? "esta semana" : "la próxima semana";
+  const nextMenuDay = nextMenuDate
+    ? new Date(`${nextMenuDate}T12:00:00Z`).getUTCDay() - 1
+    : null;
+  const nextMenuLabel = nextMenuDate
+    ? nextMenuDate === limaToday()
+      ? "hoy"
+      : `el ${dateLabel(nextMenuDate)}`
+    : null;
+  useEffect(() => {
+    if (page !== "buscar" || !state) return;
+    if (menuFilterManual && !(hideCurrentWeek && week === 0)) return;
+    const targetWeek = nextFilteredMenuDate
+      ? Number(nextFilteredMenuDate >= state.catalog.weeks[1])
+      : hideCurrentWeek
+        ? 1
+        : 0;
+    const targetDay = nextFilteredMenuDate
+      ? new Date(`${nextFilteredMenuDate}T12:00:00Z`).getUTCDay() - 1
+      : null;
+    if (week !== targetWeek) setWeek(targetWeek);
+    if (dayFilter !== targetDay) setDayFilter(targetDay);
+    if (pickupFilter) setPickupFilter(null);
+  }, [
+    page,
+    state,
+    menuFilterManual,
+    hideCurrentWeek,
+    week,
+    dayFilter,
+    pickupFilter,
+    nextFilteredMenuDate,
+  ]);
+  useEffect(() => {
+    setMenuFilterManual(false);
+  }, [state?.catalog.weeks[0]]);
   const featuredSales = (state?.catalog.weeklyDishSales || []).filter(
     (row) => row.week === featuredWeek,
   );
@@ -1647,7 +1692,7 @@ export default function App() {
   );
   const dishCandidates = new Map<string, Offering>();
   for (const offer of offers
-    .filter((offer) => offer.week === featuredWeek && offer.bookable)
+    .filter((offer) => offer.date === nextMenuDate && offer.bookable)
     .sort(
       (a, b) => a.date.localeCompare(b.date) || a.sortOrder - b.sortOrder,
     )) {
@@ -1669,11 +1714,19 @@ export default function App() {
   );
   const topDishes = hasWeeklyBookings
     ? rankedDishes.slice(0, 3)
-    : kitchens
-        .map((kitchen) =>
-          rankedDishes.find((offer) => offer.kitchenId === kitchen.id),
+    : [
+        ...kitchens
+          .map((kitchen) =>
+            rankedDishes.find((offer) => offer.kitchenId === kitchen.id),
+          )
+          .filter((offer): offer is Offering => Boolean(offer)),
+        ...rankedDishes,
+      ]
+        .filter(
+          (offer, index, candidates) =>
+            candidates.findIndex((candidate) => candidate.id === offer.id) ===
+            index,
         )
-        .filter((offer): offer is Offering => Boolean(offer))
         .slice(0, 3);
   const topKitchens = [...kitchens]
     .filter(
@@ -1753,6 +1806,7 @@ export default function App() {
     if (window.location.hash !== routes[next])
       window.history.pushState(null, "", routes[next]);
     setPage(next);
+    if (next === "buscar") setMenuFilterManual(false);
     setKitchenFilter(null);
     setSelected(null);
     window.scrollTo({
@@ -1767,6 +1821,7 @@ export default function App() {
     if (window.location.hash !== route)
       window.history.pushState(null, "", route);
     setPage("buscar");
+    setMenuFilterManual(false);
     setKitchenFilter(id);
     setWeek(0);
     setDayFilter(null);
@@ -1780,6 +1835,22 @@ export default function App() {
         : "smooth",
     });
   }
+  function goToNextMenu() {
+    go("buscar");
+    if (nextMenuDate) {
+      setWeek(featuredWeek);
+      setDayFilter(nextMenuDay);
+      setPickupFilter(null);
+      setQuery("");
+    }
+  }
+  function goToNextKitchen(id: string) {
+    goKitchen(id);
+    if (nextMenuDate) {
+      setWeek(featuredWeek);
+      setDayFilter(nextMenuDay);
+    }
+  }
   function filterKitchen(id: string | null) {
     const route = id ? `#menu/cocina/${id}` : "#menu";
     if (window.location.hash !== route)
@@ -1788,8 +1859,17 @@ export default function App() {
     setPickupFilter(null);
   }
   function changeWeek(next: number) {
+    setMenuFilterManual(true);
     setWeek(next);
-    setDayFilter(next === 0 ? limaDayIndex() : null);
+    const firstDate = nextBookableDate(
+      menuOffers.filter((offer) => offer.week === next),
+      limaToday(),
+    );
+    setDayFilter(
+      firstDate
+        ? new Date(`${firstDate}T12:00:00Z`).getUTCDay() - 1
+        : null,
+    );
     setPickupFilter(null);
   }
   function follow(event: MouseEvent<HTMLAnchorElement>, next: Page) {
@@ -2119,7 +2199,7 @@ export default function App() {
               </span>
             </div>
             {featured.length > 0 && (
-              <FeaturedCarousel slides={featured} onKitchen={goKitchen} />
+              <FeaturedCarousel slides={featured} onKitchen={goToNextKitchen} />
             )}
             <section
               className="home-discovery"
@@ -2131,21 +2211,19 @@ export default function App() {
                     {hasWeeklyBookings ? "LOS MÁS ELEGIDOS" : "PARA DESCUBRIR"}
                   </span>
                   <h2 id="popular-dishes-title">
-                    {hasWeeklyBookings
-                      ? `Los platos más pedidos de ${featuredWeekName}`
-                      : topDishes.length
-                        ? `Destacados de ${featuredWeekName}`
-                        : "Menús por venir"}
+                    {nextMenuLabel
+                      ? `Menús para ${nextMenuLabel}`
+                      : "Menús por venir"}
                   </h2>
                   <p>
                     {hasWeeklyBookings
-                      ? "Ordenados por porciones reservadas para esos días."
+                      ? `Ordenados por porciones reservadas de ${featuredWeekName}.`
                       : topDishes.length
-                        ? "Aún sin reservas para esos días; aquí tienes platos disponibles."
+                        ? "Estos platos tienen reservas disponibles para ese día."
                         : "Aquí aparecerán los platos cuando las cocinas publiquen sus menús."}
                   </p>
                 </div>
-                <button className="section-link" onClick={() => go("buscar")}>
+                <button className="section-link" onClick={goToNextMenu}>
                   Ver menú completo <ArrowRight size={18} />
                 </button>
               </div>
@@ -2164,7 +2242,7 @@ export default function App() {
                           : undefined
                       }
                       onChoose={choose}
-                      onKitchen={goKitchen}
+                      onKitchen={goToNextKitchen}
                     />
                   ))}
                 </div>
@@ -2261,10 +2339,17 @@ export default function App() {
                 state={state}
                 week={week}
                 setWeek={changeWeek}
+                hideCurrentWeek={hideCurrentWeek}
                 dayFilter={dayFilter}
-                setDayFilter={setDayFilter}
+                setDayFilter={(day) => {
+                  setMenuFilterManual(true);
+                  setDayFilter(day);
+                }}
                 pickupFilter={pickupFilter}
-                setPickupFilter={setPickupFilter}
+                setPickupFilter={(pickup) => {
+                  setMenuFilterManual(true);
+                  setPickupFilter(pickup);
+                }}
                 pickupOptions={pickupOptions}
                 kitchenFilter={kitchenFilter}
                 onKitchen={(id) => filterKitchen(id)}
@@ -2551,6 +2636,7 @@ function WeekMenu({
   state,
   week,
   setWeek,
+  hideCurrentWeek,
   dayFilter,
   setDayFilter,
   pickupFilter,
@@ -2567,6 +2653,7 @@ function WeekMenu({
   state: Bootstrap;
   week: number;
   setWeek: (week: number) => void;
+  hideCurrentWeek: boolean;
   dayFilter: number | null;
   setDayFilter: (day: number | null) => void;
   pickupFilter: string | null;
@@ -2604,14 +2691,16 @@ function WeekMenu({
     <>
       <div className="menu-filters">
         <div className="week-tabs" role="group" aria-label="Semana del menú">
-          <button
-            type="button"
-            aria-pressed={week === 0}
-            className={week === 0 ? "active" : ""}
-            onClick={() => setWeek(0)}
-          >
-            Esta semana
-          </button>
+          {!hideCurrentWeek && (
+            <button
+              type="button"
+              aria-pressed={week === 0}
+              className={week === 0 ? "active" : ""}
+              onClick={() => setWeek(0)}
+            >
+              Esta semana
+            </button>
+          )}
           <button
             type="button"
             aria-pressed={week === 1}
