@@ -8,7 +8,7 @@ const fail = (message, status = 400) => {
 
 export function pushEnabled() {
   return Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY &&
-    process.env.VAPID_SUBJECT && process.env.PUSH_DISPATCH_SECRET?.length >= 24);
+    process.env.VAPID_SUBJECT && process.env.CRON_SECRET?.length >= 24);
 }
 
 export function pushConfig() {
@@ -49,7 +49,7 @@ export async function removePushSubscription(userId, endpoint) {
 }
 
 export function validDispatchSecret(header) {
-  const expected = process.env.PUSH_DISPATCH_SECRET;
+  const expected = process.env.CRON_SECRET;
   if (!expected || expected.length < 24 || typeof header !== "string") return false;
   const actual = header.startsWith("Bearer ") ? header.slice(7) : "";
   const left = Buffer.from(actual);

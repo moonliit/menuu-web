@@ -95,7 +95,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     updateKitchenReservation,
   } = await import("../server/kitchen.mjs");
   const { handleRequest } = await import("../server/index.mjs");
-  const { dispatchPickupReminders, savePushSubscription } = await import("../server/push.mjs");
+  const { dispatchPickupReminders, savePushSubscription, validDispatchSecret } = await import("../server/push.mjs");
 
   try {
     const migrationDb = getDb();
@@ -231,11 +231,13 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     assert.equal((await getCatalog()).offerings[0].remaining, 0);
     assert.equal((await getOrders(consumers[0].id)).length, 1);
     const previousVapid = [process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY,
-      process.env.VAPID_SUBJECT, process.env.PUSH_DISPATCH_SECRET];
+      process.env.VAPID_SUBJECT, process.env.CRON_SECRET];
     process.env.VAPID_PUBLIC_KEY = "test-public-key";
     process.env.VAPID_PRIVATE_KEY = "test-private-key";
     process.env.VAPID_SUBJECT = "mailto:avisos@example.com";
-    process.env.PUSH_DISPATCH_SECRET = "test-secret-at-least-24-characters";
+    process.env.CRON_SECRET = "test-secret-at-least-24-characters";
+    assert.equal(validDispatchSecret(`Bearer ${process.env.CRON_SECRET}`), true);
+    assert.equal(validDispatchSecret("Bearer wrong-secret"), false);
     const subscription = {
       endpoint: "https://fcm.googleapis.com/fcm/send/test-device",
       keys: { p256dh: "A".repeat(88), auth: "B".repeat(22) },
@@ -250,7 +252,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     assert.match(pushed[0].payload.body, /5 minutos/);
     assert.equal((await dispatchPickupReminders(reminderTime, async () => pushed.push("duplicate"))).sent, 0);
     assert.equal(pushed.length, 1);
-    ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT", "PUSH_DISPATCH_SECRET"].forEach((name, index) => {
+    ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT", "CRON_SECRET"].forEach((name, index) => {
       if (previousVapid[index] === undefined) delete process.env[name];
       else process.env[name] = previousVapid[index];
     });
