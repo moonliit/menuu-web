@@ -78,6 +78,18 @@
   outline-offset: 2px;
 }
 
+@media (min-width: 701px) {
+  .install-prompt {
+    width: max-content;
+    max-width: calc(100vw - 48px);
+  }
+
+  .install-prompt-copy {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
 @media (max-width: 700px) {
   .install-prompt {
     right: 20px;
