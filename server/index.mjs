@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { OAuth2Client } from "google-auth-library";
 import { deliveryMoment } from "./catalog.mjs";
 import {
   adminData,
@@ -16,11 +17,13 @@ import {
   cancelOrder,
   createBooking,
   findUserByEmail,
+  findUserByGoogleSub,
   getCatalog,
   getOrders,
   getOrdersPage,
   insertSession,
   insertUser,
+  linkGoogleSub,
   removeSession,
   submitReview,
   updateConsumerProfile,
@@ -46,6 +49,10 @@ import {
   savePushSubscription,
   validDispatchSecret,
 } from "./push.mjs";
+
+const googleClientId =
+  process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
+const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const isDev = process.argv.includes("--dev");
@@ -159,6 +166,35 @@ function validateEmail(email) {
   return (
     typeof email === "string" && /^[^\s@]+@utec\.edu\.pe$/i.test(email.trim())
   );
+}
+
+async function verifyGoogleCredential(credential) {
+  if (!googleClient || !googleClientId)
+    throw new Error("Falta GOOGLE_CLIENT_ID para validar Google.");
+
+  const ticket = await googleClient.verifyIdToken({
+    idToken: credential,
+    audience: googleClientId,
+  });
+  const payload = ticket.getPayload();
+
+  if (
+    !payload ||
+    (payload.iss !== "accounts.google.com" &&
+      payload.iss !== "https://accounts.google.com") ||
+    payload.email_verified !== true ||
+    typeof payload.sub !== "string" ||
+    !payload.sub ||
+    typeof payload.email !== "string" ||
+    !payload.email
+  )
+    throw new Error("Las credenciales de Google no son válidas.");
+
+  return {
+    email: payload.email.trim().toLowerCase(),
+    name: typeof payload.name === "string" ? payload.name.trim() : "",
+    sub: payload.sub,
+  };
 }
 
 function validBirthDate(value) {
@@ -488,93 +524,28 @@ async function handleApi(req, res, url) {
   const data = await body(req);
 
   if (url.pathname === "/api/auth/register") {
-    const name = typeof data.name === "string" ? data.name.trim() : "";
-    const email =
-      typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
-    const password = typeof data.password === "string" ? data.password : "";
-    const studentCode =
-      typeof data.studentCode === "string"
-        ? data.studentCode.trim().toUpperCase()
-        : "";
-    const career = typeof data.career === "string" ? data.career.trim() : "";
-    const birthDate =
-      data.birthDate == null || data.birthDate === "" ? null : data.birthDate;
-
-    if (name.length < 2 || name.length > 80)
-      return error(res, 400, "Escribe tu nombre (2 a 80 caracteres).");
-
-    if (!validateEmail(email))
-      return error(res, 400, "Usa tu correo institucional @utec.edu.pe.");
-
-    if (
-      !/^(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})$/.test(
-        studentCode,
-      )
-    )
-      return error(
-        res,
-        400,
-        "Usa 9 dígitos o un código PRE, por ejemplo 20261PREEN01008.",
-      );
-
-    if (!careers.includes(career))
-      return error(res, 400, "Selecciona una carrera de la lista.");
-
-    if (!validBirthDate(birthDate))
-      return error(
-        res,
-        400,
-        "Escribe una fecha de nacimiento válida que no sea futura.",
-      );
-
-    if (password.length < 5 || password.length > 128)
-      return error(
-        res,
-        400,
-        "La contraseña debe tener entre 5 y 128 caracteres.",
-      );
-
-    if (await findUserByEmail(email))
-      return error(res, 409, "Ese correo ya tiene una cuenta.");
-    const user = {
-      id: randomUUID(),
-      name,
-      email,
-      role: "consumer",
-      studentCode,
-      career,
-      birthDate,
-      passwordHash: hashPassword(password),
-    };
-
-    try {
-      await insertUser(user);
-    } catch (cause) {
-      if (String(cause.code).includes("CONSTRAINT_UNIQUE"))
-        return error(
-          res,
-          409,
-          /student_code/i.test(cause.message)
-            ? "Ese código de estudiante ya está registrado."
-            : "Ese correo ya tiene una cuenta.",
-        );
-      throw cause;
-    }
-    const token = randomBytes(32).toString("hex");
-
-    await insertSession(token, user.id);
-    res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
-
-    return json(res, 201, { user: publicUser(user) });
+    return error(
+      res,
+      403,
+      "El registro de estudiantes solo está disponible con Google.",
+    );
   }
 
   if (url.pathname === "/api/auth/login") {
-    const email =
-      typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
-    const password = typeof data.password === "string" ? data.password : "";
     const role = ["consumer", "kitchen", "admin"].includes(data.role)
       ? data.role
       : "consumer";
+
+    if (role === "consumer")
+      return error(
+        res,
+        403,
+        "El acceso de estudiantes solo está disponible con Google.",
+      );
+
+    const email =
+      typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
+    const password = typeof data.password === "string" ? data.password : "";
     const user = await findUserByEmail(email);
 
     if (!user || !verifyPassword(password, user.passwordHash))
@@ -586,9 +557,7 @@ async function handleApi(req, res, url) {
         403,
         role === "kitchen"
           ? "Esta cuenta no tiene acceso de cocina."
-          : role === "admin"
-            ? "Esta cuenta no tiene acceso de admin."
-            : "Esta cuenta usa otro acceso de Menúu.",
+          : "Esta cuenta no tiene acceso de admin.",
       );
     const token = randomBytes(32).toString("hex");
 
@@ -599,32 +568,21 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/auth/google") {
-    let email = "";
-    let name = "";
+    if (typeof data.credential !== "string" || !data.credential)
+      return error(res, 401, "Se requiere una credencial válida de Google.");
 
-    if (typeof data.credential === "string" && data.credential) {
-      try {
-        const parts = data.credential.split(".");
+    let googleIdentity;
 
-        if (parts.length === 3) {
-          const payload = JSON.parse(
-            Buffer.from(parts[1], "base64url").toString("utf8"),
-          );
+    try {
+      googleIdentity = await verifyGoogleCredential(data.credential);
+    } catch (cause) {
+      if (cause?.message === "Falta GOOGLE_CLIENT_ID para validar Google.")
+        throw cause;
 
-          email =
-            typeof payload.email === "string"
-              ? payload.email.trim().toLowerCase()
-              : "";
-          name = typeof payload.name === "string" ? payload.name.trim() : "";
-        }
-      } catch {
-        return error(res, 400, "Token de Google inválido.");
-      }
-    } else {
-      email =
-        typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
-      name = typeof data.name === "string" ? data.name.trim() : "";
+      return error(res, 401, "La credencial de Google no es válida.");
     }
+
+    const { email, name, sub } = googleIdentity;
 
     if (!email) return error(res, 400, "Indica tu cuenta de Google.");
 
@@ -635,7 +593,16 @@ async function handleApi(req, res, url) {
         "Solo puedes acceder con una cuenta institucional de Google (@utec.edu.pe).",
       );
 
-    let user = await findUserByEmail(email);
+    let user = await findUserByGoogleSub(sub);
+
+    if (user && user.email !== email)
+      return error(
+        res,
+        409,
+        "Esta identidad de Google ya está vinculada a otra cuenta.",
+      );
+
+    if (!user) user = await findUserByEmail(email);
 
     if (user) {
       if (user.role !== "consumer")
@@ -644,6 +611,11 @@ async function handleApi(req, res, url) {
           403,
           "Esta cuenta pertenece a una cocina. Usa el acceso de cocinas.",
         );
+
+      if (user.googleSub && user.googleSub !== sub)
+        return error(res, 409, "Esta cuenta está vinculada a otra cuenta de Google.");
+
+      if (!user.googleSub) await linkGoogleSub(user.id, sub);
 
       const token = randomBytes(32).toString("hex");
 
@@ -716,6 +688,7 @@ async function handleApi(req, res, url) {
       career,
       birthDate,
       passwordHash: hashPassword(randomBytes(16).toString("hex")),
+      googleSub: sub,
     };
 
     try {

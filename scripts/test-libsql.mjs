@@ -86,10 +86,12 @@ if (!process.env.MENUU_TEST_DB_PATH) {
   const {
     cancelOrder,
     createBooking,
+    findUserByGoogleSub,
     getCatalog,
     getOrders,
     insertSession,
     insertUser,
+    linkGoogleSub,
     submitReview,
   } = await import("../server/repository.mjs");
   const { kitchenData, kitchenImage, saveDish, saveKitchenImage, saveOffer } =
@@ -191,6 +193,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     }));
 
     for (const consumer of consumers) await insertUser(consumer);
+    await linkGoogleSub(consumers[0].id, "google-sub-0");
+    assert.equal(
+      (await findUserByGoogleSub("google-sub-0")).id,
+      consumers[0].id,
+    );
     const dishId = await saveDish("test-kitchen", {
       name: "Almuerzo temporal",
       description: "Con arroz.",
@@ -388,15 +395,19 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
       });
 
-      assert.equal(registered.status, 201);
-      const cookie = registered.headers.get("set-cookie").split(";")[0];
+      assert.equal(registered.status, 403);
+
+      const consumerToken = "c".repeat(64);
+
+      await insertSession(consumerToken, consumers[0].id);
+      const cookie = `menuu_session=${consumerToken}`;
       const bootstrap = await fetch(`${base}/api/bootstrap`, {
         headers: { Cookie: cookie },
       });
 
       assert.equal(bootstrap.status, 200);
-      assert.equal((await bootstrap.json()).user.email, "nueva@utec.edu.pe");
-      // Prueba de acceso con Google para nuevo estudiante (requiere completar registro)
+      assert.equal((await bootstrap.json()).user.email, "temporal0@utec.edu.pe");
+      // Las requests sin un credential real de Google se rechazan.
       const googleNew = await fetch(`${base}/api/auth/google`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -406,57 +417,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
       });
 
-      assert.equal(googleNew.status, 200);
-      const googleNewRes = await googleNew.json();
-
-      assert.equal(googleNewRes.status, "needs_registration");
-      assert.equal(googleNewRes.email, "alumno.google@utec.edu.pe");
-
-      // El nuevo estudiante completa su proceso de registro usual
-      const googleRegister = await fetch(`${base}/api/auth/google`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: "alumno.google@utec.edu.pe",
-          name: "Alumno Google",
-          studentCode: "202610999",
-          career: "Ciencia de la Computación",
-          birthDate: null,
-        }),
-      });
-
-      assert.equal(googleRegister.status, 201);
-      const googleRegRes = await googleRegister.json();
-
-      assert.equal(googleRegRes.status, "authenticated");
-      assert.equal(googleRegRes.user.email, "alumno.google@utec.edu.pe");
-      assert.equal(googleRegRes.user.studentCode, "202610999");
-
-      // Prueba de acceso con Google para estudiante ya existente (ingresa directo)
-      const googleExisting = await fetch(`${base}/api/auth/google`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: "alumno.google@utec.edu.pe",
-        }),
-      });
-
-      assert.equal(googleExisting.status, 200);
-      const googleExistRes = await googleExisting.json();
-
-      assert.equal(googleExistRes.status, "authenticated");
-      assert.equal(googleExistRes.user.email, "alumno.google@utec.edu.pe");
-
-      // Rechazo de correo no institucional
-      const googleInvalid = await fetch(`${base}/api/auth/google`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: "usuario@gmail.com",
-        }),
-      });
-
-      assert.equal(googleInvalid.status, 400);
+      assert.equal(googleNew.status, 401);
 
       const sessionResponse = await fetch(`${base}/api/session`, {
         headers: { Cookie: cookie },
@@ -464,7 +425,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
 
       assert.equal(
         (await sessionResponse.json()).user.email,
-        "nueva@utec.edu.pe",
+        "temporal0@utec.edu.pe",
       );
       assert.equal((await fetch(`${base}/api/push/dispatch`)).status, 401);
       const catalogResponse = await fetch(`${base}/api/catalog`);
@@ -481,9 +442,6 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         ).status,
         400,
       );
-      const consumerToken = "c".repeat(64);
-
-      await insertSession(consumerToken, consumers[0].id);
       const ordersPageResponse = await fetch(
         `${base}/api/orders?limit=1&offset=0`,
         {
@@ -495,6 +453,32 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       assert.equal(ordersPageResponse.status, 200);
       assert.equal(ordersPage.orders.length, 1);
       assert.ok(ordersPage.total >= 1);
+
+      const preUsers = [
+        ["pre@utec.edu.pe", "Estudiante PRE", "1234PRE5612345"],
+        ["prelargo@utec.edu.pe", "Estudiante PRE largo", "5678PRE90123456"],
+        ["preletras@utec.edu.pe", "Estudiante PRE letras", "20261PREEN01008"],
+      ];
+
+      for (const [email, name, studentCode] of preUsers)
+        await insertUser({
+          id: randomUUID(),
+          name,
+          email,
+          passwordHash: hashPassword("clave-segura"),
+          role: "consumer",
+          studentCode,
+          career: "Ciencia de la Computación",
+          birthDate: null,
+        });
+
+      const preToken = "d".repeat(64);
+      const preUser = (
+        await db.query("SELECT id FROM users WHERE email='pre@utec.edu.pe'")
+      ).rows[0];
+
+      await insertSession(preToken, preUser.id);
+
       const preRegistered = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -507,11 +491,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
       });
 
-      assert.equal(preRegistered.status, 201);
-      assert.equal(
-        (await preRegistered.json()).user.studentCode,
-        "1234PRE5612345",
-      );
+      assert.equal(preRegistered.status, 403);
       const preLongRegistered = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -524,11 +504,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
       });
 
-      assert.equal(preLongRegistered.status, 201);
-      assert.equal(
-        (await preLongRegistered.json()).user.studentCode,
-        "5678PRE90123456",
-      );
+      assert.equal(preLongRegistered.status, 403);
       const preLettersRegistered = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -541,16 +517,12 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
       });
 
-      assert.equal(preLettersRegistered.status, 201);
-      assert.equal(
-        (await preLettersRegistered.json()).user.studentCode,
-        "20261PREEN01008",
-      );
+      assert.equal(preLettersRegistered.status, 403);
       const preUpdated = await fetch(`${base}/api/account/profile`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Cookie: preRegistered.headers.get("set-cookie").split(";")[0],
+          Cookie: `menuu_session=${preToken}`,
         },
         body: JSON.stringify({
           name: "Estudiante PRE",
@@ -576,10 +548,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
       });
 
-      assert.equal(invalidPre.status, 400);
-      const preUser = (
-        await db.query("SELECT id FROM users WHERE email='pre@utec.edu.pe'")
-      ).rows[0];
+      assert.equal(invalidPre.status, 403);
 
       await db.query(
         "INSERT INTO users(id,name,email,password_hash,role,kitchen_id) VALUES ('kitchen-actor','Cocina temporal','cocina@menuu.test','hash','kitchen','test-kitchen')",
@@ -686,7 +655,17 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
       });
 
-      assert.equal(freshRegistration.status, 201);
+      assert.equal(freshRegistration.status, 403);
+      await insertUser({
+        id: randomUUID(),
+        name: "Estudiante reciente",
+        email: "fresh@utec.edu.pe",
+        passwordHash: hashPassword("clave-segura"),
+        role: "consumer",
+        studentCode: "900000003",
+        career: "Ciencia de la Computación",
+        birthDate: null,
+      });
       const freshUser = (
         await db.query("SELECT id FROM users WHERE email='fresh@utec.edu.pe'")
       ).rows[0];

@@ -725,6 +725,7 @@ function AuthPanel({
 }) {
   const [step, setStep] = useState<"google" | "register">("google");
   const [googleEmail, setGoogleEmail] = useState("");
+  const [googleCredential, setGoogleCredential] = useState("");
   const [name, setName] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [career, setCareer] = useState("");
@@ -732,12 +733,9 @@ function AuthPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [careerInvalid, setCareerInvalid] = useState(false);
-  const [showPrompt, setShowPrompt] = useState(false);
-  const [emailInput, setEmailInput] = useState("");
-  const [nameInput, setNameInput] = useState("");
   const careerTriggerRef = useRef<HTMLButtonElement>(null);
-  const promptInputRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const googleButtonRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -748,7 +746,12 @@ function AuthPanel({
       const g = (
         window as unknown as {
           google?: {
-            accounts?: { id?: { initialize: (config: unknown) => void } };
+            accounts?: {
+              id?: {
+                initialize: (config: unknown) => void;
+                renderButton: (element: HTMLElement, options: unknown) => void;
+              };
+            };
           };
         }
       ).google;
@@ -761,7 +764,17 @@ function AuthPanel({
             }
           },
           hosted_domain: "utec.edu.pe",
+          ux_mode: "popup",
         });
+        if (googleButtonRef.current) {
+          g.accounts.id.renderButton(googleButtonRef.current, {
+            theme: "outline",
+            size: "large",
+            text: "continue_with",
+            shape: "rectangular",
+            width: 320,
+          });
+        }
       }
     };
 
@@ -777,12 +790,6 @@ function AuthPanel({
       initGsi();
     }
   }, []);
-
-  useEffect(() => {
-    if (showPrompt) {
-      promptInputRef.current?.focus();
-    }
-  }, [showPrompt]);
 
   useEffect(() => {
     if (step === "register") {
@@ -809,13 +816,15 @@ function AuthPanel({
       }>("/api/auth/google", payload);
 
       if (res.status === "needs_registration") {
+        if (!payload.credential) {
+          throw new Error("No recibimos una credencial válida de Google.");
+        }
+        setGoogleCredential(payload.credential);
         setGoogleEmail(res.email || payload.email || "");
         setName(res.name || payload.name || "");
         setStep("register");
-        setShowPrompt(false);
       } else {
         await onAuthenticated();
-        setShowPrompt(false);
       }
     } catch (cause) {
       setError(
@@ -828,33 +837,6 @@ function AuthPanel({
     }
   }
 
-  function handleGoogleClick() {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    const g = (
-      window as unknown as {
-        google?: { accounts?: { id?: { prompt: () => void } } };
-      }
-    ).google;
-    if (clientId && g?.accounts?.id) {
-      g.accounts.id.prompt();
-    } else {
-      setShowPrompt(true);
-    }
-  }
-
-  function handlePromptSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const cleanEmail = emailInput.trim().toLowerCase();
-    if (!cleanEmail.endsWith("@utec.edu.pe")) {
-      setError("Usa un correo institucional que termine en @utec.edu.pe");
-      return;
-    }
-    authenticateWithGoogle({
-      email: cleanEmail,
-      name: nameInput.trim() || undefined,
-    });
-  }
-
   async function handleRegisterSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!career) {
@@ -864,7 +846,7 @@ function AuthPanel({
       return;
     }
     await authenticateWithGoogle({
-      email: googleEmail,
+      credential: googleCredential,
       name: name.trim(),
       studentCode: studentCode.trim(),
       career,
@@ -905,17 +887,11 @@ function AuthPanel({
               </p>
             </div>
 
-            <button
-              type="button"
+            <div
+              ref={googleButtonRef}
               className="google-auth-button"
-              onClick={handleGoogleClick}
-              disabled={busy}
-            >
-              <BrandGoogleIcon size={22} />
-              <span>
-                {busy ? "Verificando cuenta…" : "Continuar con Google"}
-              </span>
-            </button>
+              aria-busy={busy}
+            />
 
             <div className="auth-security-notice">
               <ShieldCheck size={20} aria-hidden="true" />
@@ -1043,113 +1019,6 @@ function AuthPanel({
         />
         <figcaption>Imagen referencial</figcaption>
       </figure>
-
-      {showPrompt && (
-        <div
-          className="google-prompt-backdrop"
-          onClick={() => !busy && setShowPrompt(false)}
-        >
-          <div
-            className="google-prompt-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="google-dialog-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="google-dialog-header">
-              <div className="google-dialog-brand">
-                <BrandGoogleIcon size={26} />
-                <div className="google-dialog-titles">
-                  <h3 id="google-dialog-title">Acceder con Google</h3>
-                  <span>Cuenta institucional UTEC</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="google-dialog-close"
-                onClick={() => setShowPrompt(false)}
-                aria-label="Cerrar diálogo"
-                disabled={busy}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <form onSubmit={handlePromptSubmit} className="google-dialog-form">
-              <label>
-                Correo institucional (@utec.edu.pe)
-                <input
-                  ref={promptInputRef}
-                  type="email"
-                  required
-                  pattern="[^\s@]+@utec\.edu\.pe"
-                  title="Usa un correo @utec.edu.pe"
-                  placeholder="tu.nombre@utec.edu.pe"
-                  value={emailInput}
-                  onChange={(e) => {
-                    setEmailInput(e.target.value);
-                    setError("");
-                  }}
-                  autoFocus
-                />
-              </label>
-
-              <label>
-                Nombre completo (opcional)
-                <input
-                  type="text"
-                  placeholder="Tu nombre y apellido"
-                  value={nameInput}
-                  onChange={(e) => setNameInput(e.target.value)}
-                />
-              </label>
-
-              <div className="google-quick-accounts">
-                <span className="google-quick-label">
-                  Cuentas rápidas de prueba:
-                </span>
-                <div className="google-quick-chips">
-                  <button
-                    type="button"
-                    className="google-chip"
-                    onClick={() => {
-                      setEmailInput("alumno@utec.edu.pe");
-                      setNameInput("Alumno UTEC");
-                    }}
-                  >
-                    alumno@utec.edu.pe
-                  </button>
-                  <button
-                    type="button"
-                    className="google-chip"
-                    onClick={() => {
-                      setEmailInput("estudiante.demo@utec.edu.pe");
-                      setNameInput("Estudiante Demo");
-                    }}
-                  >
-                    estudiante.demo@utec.edu.pe
-                  </button>
-                </div>
-              </div>
-
-              <div className="google-dialog-actions">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => setShowPrompt(false)}
-                  disabled={busy}
-                >
-                  Cancelar
-                </Button>
-                <Button type="submit" disabled={busy}>
-                  <span>{busy ? "Accediendo…" : "Continuar con Google"}</span>
-                  <ArrowRight size={18} />
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {error && <AuthErrorToast message={error} onClose={() => setError("")} />}
     </div>
