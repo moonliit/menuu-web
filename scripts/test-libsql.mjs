@@ -748,6 +748,34 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         ).some((item) => item.id === freshUser.id),
         true,
       );
+      const restoredSession = await fetch(`${base}/api/admin/data`, {
+        headers: { Cookie: `menuu_session=${adminToken}` },
+      });
+      assert.equal(restoredSession.status, 200);
+      const restoredCsrf = /menuu_csrf=([^;]+)/.exec(
+        restoredSession.headers.get("set-cookie") || "",
+      )?.[1];
+      assert.ok(restoredCsrf, "Una sesión anterior debe recibir un token CSRF");
+      const proxyHeaders = {
+        Cookie: `menuu_session=${adminToken}; menuu_csrf=${restoredCsrf}`,
+        "Content-Type": "application/json",
+        "X-CSRF-Token": restoredCsrf,
+        Origin: "https://menuu.example",
+        Host: "internal.example",
+        "Sec-Fetch-Site": "same-origin",
+      };
+      const proxyWrite = await fetch(`${base}/api/admin/offers/capacity`, {
+        method: "POST",
+        headers: proxyHeaders,
+        body: JSON.stringify({ offerId: secondOffer, capacity: 2 }),
+      });
+      assert.equal(proxyWrite.status, 200);
+      const crossSiteWrite = await fetch(`${base}/api/admin/offers/capacity`, {
+        method: "POST",
+        headers: { ...proxyHeaders, "Sec-Fetch-Site": "cross-site" },
+        body: JSON.stringify({ offerId: secondOffer, capacity: 2 }),
+      });
+      assert.equal(crossSiteWrite.status, 403);
       const changedCapacity = await fetch(`${base}/api/admin/offers/capacity`, {
         method: "POST",
         headers: adminHeaders,
@@ -1315,6 +1343,24 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       });
 
       assert.equal(kitchenAfterCorrection.status, 200);
+      const kitchenCsrf = /menuu_csrf=([^;]+)/.exec(
+        kitchenAfterCorrection.headers.get("set-cookie") || "",
+      )?.[1];
+      assert.ok(kitchenCsrf);
+      const photoUpload = await fetch(`${base}/api/kitchen/photo?scope=dish`, {
+        method: "POST",
+        headers: {
+          Cookie: `menuu_session=${kitchenToken}; menuu_csrf=${kitchenCsrf}`,
+          "X-CSRF-Token": kitchenCsrf,
+          "Content-Type": "image/png",
+          Origin: "https://menuu.example",
+          Host: "internal.example",
+          "Sec-Fetch-Site": "same-origin",
+        },
+        body: png,
+      });
+      assert.equal(photoUpload.status, 200);
+      assert.match((await photoUpload.json()).url, /^\/api\/kitchen\/image\//);
       const kitchenOperations = await fetch(
         `${base}/api/kitchen/data?scope=operations`,
         {

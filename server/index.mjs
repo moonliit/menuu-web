@@ -264,10 +264,26 @@ function sameOrigin(req) {
 
   if (!origin) return true;
   try {
-    return new URL(origin).host === req.headers.host;
+    const source = new URL(origin);
+    if (!['http:', 'https:'].includes(source.protocol)) return false;
+    if (source.host === req.headers.host) return true;
+    if (
+      runningOnVercel &&
+      source.host === req.headers['x-forwarded-host']
+    ) return true;
+    // The browser knows the public origin even when a proxy rewrites Host.
+    return req.headers['sec-fetch-site'] === 'same-origin';
   } catch {
     return false;
   }
+}
+
+function refreshCsrfCookie(req, res) {
+  if (req.method === 'GET' && !cookieValue(req, 'menuu_csrf'))
+    res.setHeader(
+      'Set-Cookie',
+      csrfCookie(req, randomBytes(32).toString('hex'), 7 * 86400),
+    );
 }
 
 function validateEmail(email) {
@@ -365,6 +381,11 @@ function visibleOrder(order, now = new Date()) {
 
 async function handleApi(req, res, url) {
   if (applyRateLimit(req, res, url)) return;
+
+  // Existing sessions may predate CSRF protection. Any read can restore the
+  // browser token before the next kitchen, admin, or consumer action.
+  if (sessionToken(req) || url.pathname === '/api/session')
+    refreshCsrfCookie(req, res);
 
   if (url.pathname === "/api/catalog" || url.pathname === "/api/bookings" || url.pathname === "/api/orders" || url.pathname === "/api/bootstrap" || url.pathname === "/api/admin/data")
     await expireUnpaidCheckouts();
@@ -609,12 +630,6 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/session") {
     const user = await userFromSession(sessionToken(req));
-
-    if (!cookieValue(req, "menuu_csrf"))
-      res.setHeader(
-        "Set-Cookie",
-        csrfCookie(req, randomBytes(32).toString("hex"), 7 * 86400),
-      );
 
     return json(res, 200, { user: publicUser(user), careers });
   }
