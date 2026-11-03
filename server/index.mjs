@@ -28,6 +28,7 @@ import {
 } from "./repository.mjs";
 import { hashPassword, publicUser, verifyPassword } from "./store.mjs";
 import {
+  addExtraPortion,
   addKitchenReservation,
   kitchenData,
   kitchenImage,
@@ -40,6 +41,7 @@ import {
 } from "./kitchen.mjs";
 import { migrate } from "../scripts/migrate.mjs";
 import { dispatchPickupReminders, pushConfig, removePushSubscription, savePushSubscription, validDispatchSecret } from "./push.mjs";
+import { expireUnpaidCheckouts, paymentProof, pendingPayments, reviewPayment, submitPaymentProof } from "./payments.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const isDev = process.argv.includes("--dev");
@@ -62,6 +64,8 @@ const mime = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".png": "image/png",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
@@ -192,6 +196,7 @@ function listPage(url, defaultLimit = 20) {
 
 function visibleOrder(order, now = new Date()) {
   if (order.status !== "reservado") return order;
+  if (order.paymentCheckoutId && order.paymentStatus !== "approved") return order;
 
   if (order.fulfillmentStatus === "delivered")
     return { ...order, status: "entregado" };
@@ -205,6 +210,8 @@ function visibleOrder(order, now = new Date()) {
 }
 
 async function handleApi(req, res, url) {
+  if (url.pathname === "/api/catalog" || url.pathname === "/api/bookings" || url.pathname === "/api/orders" || url.pathname === "/api/bootstrap" || url.pathname === "/api/admin/data")
+    await expireUnpaidCheckouts();
   if (req.method === "GET" && url.pathname === "/api/push/dispatch") {
     if (!validDispatchSecret(req.headers.authorization))
       return error(res, 401, "Acceso no permitido.");
@@ -243,6 +250,8 @@ async function handleApi(req, res, url) {
     if (!user) return error(res, 401, "Inicia sesión como admin.");
     if (user.role !== "admin")
       return error(res, 403, "Acceso de admin requerido.");
+    if (req.method === "GET" && url.pathname === "/api/admin/payments")
+      return json(res, 200, { payments: await pendingPayments() });
     if (req.method === "GET" && url.pathname === "/api/admin/data") {
       const weekValue = url.searchParams.get("week");
       const week = weekValue === null ? null : Number(weekValue);
@@ -268,6 +277,9 @@ async function handleApi(req, res, url) {
     if (req.method !== "POST" || !sameOrigin(req))
       return error(res, 403, "Solicitud no permitida.");
     const data = await body(req);
+    const reviewMatch = /^\/api\/admin\/payments\/([a-f0-9-]{36})\/review$/.exec(url.pathname);
+    if (reviewMatch)
+      return json(res, 200, await reviewPayment(reviewMatch[1], user.id, data?.decision, data?.note));
     if (url.pathname === "/api/admin/offers/capacity")
       return json(res, 200, await updateAdminCapacity(user.id, data));
     if (url.pathname === "/api/admin/reservations/add") {
@@ -277,6 +289,10 @@ async function handleApi(req, res, url) {
         201,
         await addKitchenReservation(kitchenId, user.id, data),
       );
+    }
+    if (url.pathname === "/api/admin/reservations/extra") {
+      const kitchenId = await adminOrderKitchen(data?.orderId);
+      return json(res, 201, await addExtraPortion(kitchenId, user.id, data));
     }
     if (url.pathname === "/api/admin/reservations/update") {
       const kitchenId = await adminOrderKitchen(data?.orderId);
@@ -370,6 +386,8 @@ async function handleApi(req, res, url) {
         201,
         await addKitchenReservation(user.kitchenId, user.id, data),
       );
+    if (url.pathname === "/api/kitchen/reservations/extra")
+      return json(res, 201, await addExtraPortion(user.kitchenId, user.id, data));
 
     if (url.pathname === "/api/kitchen/reservations/update")
       return json(
@@ -401,6 +419,34 @@ async function handleApi(req, res, url) {
       ...page,
       orders: page.orders.map((order) => visibleOrder(order)),
     });
+  }
+  const proofMatch = /^\/api\/payments\/([a-f0-9-]{36})\/proof$/.exec(url.pathname);
+  if (req.method === "GET" && proofMatch) {
+    const user = await userFromSession(sessionToken(req));
+    if (!user) return error(res, 401, "Inicia sesión para ver el comprobante.");
+    const proof = await paymentProof(proofMatch[1], user);
+    res.writeHead(200, { "Content-Type": proof.mime, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    return res.end(proof.content);
+  }
+  if (req.method === "POST" && proofMatch) {
+    if (!sameOrigin(req)) return error(res, 403, "Origen no permitido.");
+    const user = await userFromSession(sessionToken(req));
+    if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+    const mimeType = String(req.headers["content-type"] || "").split(";")[0];
+    const chunks = [];
+    let size = 0;
+    if (Buffer.isBuffer(req.body)) {
+      size = req.body.length;
+      chunks.push(req.body);
+    } else {
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 2_000_000) return error(res, 413, "La imagen supera 2 MB.");
+        chunks.push(chunk);
+      }
+    }
+    if (size > 2_000_000) return error(res, 413, "La imagen supera 2 MB.");
+    return json(res, 200, await submitPaymentProof(user.id, proofMatch[1], Buffer.concat(chunks), mimeType));
   }
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {

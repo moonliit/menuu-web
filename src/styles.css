@@ -3685,3 +3685,15 @@ p {
     transform: none;
   }
 }
+/* Pago anticipado en Pedidos. */
+.yape-payment { display: grid; gap: 14px; padding: 20px; margin: 16px 0; border: 1px solid var(--color-border); border-radius: 20px; background: #fff; }
+.yape-payment h3 { margin: 0; color: var(--color-brand); font: 500 24px/1.2 var(--font-display); }
+.yape-payment p, .yape-payment ol { margin: 0; }
+.yape-payment ol { padding-left: 22px; }
+.yape-payment li + li { margin-top: 8px; }
+.yape-qr { display: block; width: min(100%, 300px); height: auto; justify-self: center; border-radius: 16px; }
+.yape-download { justify-self: center; min-height: 44px; display: inline-flex; align-items: center; color: var(--color-brand); font-weight: 600; text-decoration: underline; }
+.yape-upload { display: grid; gap: 8px; font-weight: 600; color: var(--color-brand); }
+.yape-upload input { width: 100%; font: inherit; }
+.yape-status { margin: 10px 0; color: var(--color-brand); font-weight: 600; }
+.yape-cancel-note { margin: 8px 0; color: var(--color-muted); font-size: 14px; }

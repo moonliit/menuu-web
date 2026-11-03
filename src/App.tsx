@@ -182,7 +182,8 @@ function DataNoticeDialog({
           <p>
             Tu cuenta permite ver los pedidos de todas las cocinas y registrar
             cupos, altas manuales, entregas, ausencias y pagos. Guardamos quién
-            realizó cada cambio y cuándo.
+            realizó cada cambio y cuándo. También revisamos los comprobantes
+            de Yape de las reservas anticipadas.
           </p>
         </>
       ) : kind === "kitchen" ? (
@@ -205,8 +206,9 @@ function DataNoticeDialog({
           <p>
             Al crear tu cuenta guardamos tu correo institucional, nombre, código
             de estudiante, carrera y, si la agregas, fecha de nacimiento.
-            También guardamos tus reservas, opciones elegidas, comentarios y
-            reseñas para mostrarte tus pedidos y gestionar su entrega.
+            También guardamos tus reservas, opciones elegidas, comentarios,
+            comprobantes de Yape y reseñas para mostrarte tus pedidos,
+            verificar el pago y gestionar su entrega.
           </p>
           <p>
             Las cantidades reservadas y las reseñas permiten mostrar
@@ -1561,6 +1563,7 @@ export default function App() {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersLoaded, setOrdersLoaded] = useState(false);
   const ordersRequestRef = useRef(0);
+  const catalogRequestRef = useRef(0);
   const [loadError, setLoadError] = useState("");
   const [week, setWeek] = useState(0);
   const [dayFilter, setDayFilter] = useState<number | null>(() =>
@@ -1613,10 +1616,11 @@ export default function App() {
     );
   }
   async function refreshCatalog(force = false, freshServer = false) {
-    if (freshServer) invalidateCache("catalog");
+    const requestId = ++catalogRequestRef.current;
     const catalog = await cachedRequest(
       "catalog", () => api<Bootstrap["catalog"]>(freshServer ? "/api/catalog?fresh=1" : "/api/catalog"), 60_000, force,
     );
+    if (requestId !== catalogRequestRef.current) return catalog;
     setState((current) => current ? { ...current, catalog } : current);
     setCatalogReady(true);
     setSelected((current) => current
@@ -1673,7 +1677,7 @@ export default function App() {
   useEffect(() => {
     const update = () => {
       if (!document.hidden && ["inicio", "buscar", "carrito"].includes(page))
-        refreshCatalog().catch(() => {});
+        refreshCatalog(true, true).catch(() => {});
     };
     update();
     const timer = ["inicio", "buscar", "carrito"].includes(page)
@@ -1682,14 +1686,16 @@ export default function App() {
         }, page === "carrito" ? 15_000 : 60_000)
       : null;
     document.addEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
     return () => {
       if (timer !== null) window.clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
     };
   }, [page]);
   useEffect(() => {
     if (page !== "pedidos" || state?.user?.role !== "consumer") return;
-    loadOrders(ordersPage).catch((cause) =>
+    loadOrders(ordersPage, true).catch((cause) =>
       setLoadError(cause instanceof Error ? cause.message : "No pudimos cargar tus pedidos."));
   }, [page, state?.user?.id, ordersPage]);
   useEffect(() => {
@@ -1699,9 +1705,11 @@ export default function App() {
     };
     const timer = window.setInterval(update, 45_000);
     document.addEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
     };
   }, [page, state?.user?.id, ordersPage]);
   useEffect(() => {
@@ -2113,7 +2121,7 @@ export default function App() {
       setOrdersPage(0);
       await refreshCatalog(true, true);
       go("pedidos");
-      setNotice("Reserva confirmada");
+      setNotice("Pedido apartado. Completa el pago con Yape.");
       window.setTimeout(() => setNotice(""), 4000);
     } catch (cause) {
       setBookingError(
@@ -2523,7 +2531,7 @@ export default function App() {
                     Recoge cada plato en el comedor durante la ventana indicada.
                   </p>
                   <p>
-                    <strong>Pago:</strong> QR al recibir tu comida.
+                    <strong>Pago:</strong> Yape anticipado. Apartaremos las porciones durante 15 minutos para que subas el comprobante.
                   </p>
                   {state.user?.role === "consumer" &&
                     <PickupNotifications userId={state.user.id} />}
@@ -2549,7 +2557,7 @@ export default function App() {
                       )
                     }
                   >
-                    {booking ? "Confirmando…" : "Confirmar reserva"}{" "}
+                    {booking ? "Apartando…" : "Continuar al pago"}{" "}
                     <ArrowRight size={18} />
                   </Button>
                   {cartRows.some(
@@ -2572,7 +2580,7 @@ export default function App() {
             <div className="page-heading">
               <span className="eyebrow">TUS BREAKS</span>
               <h1>Mis pedidos</h1>
-              <p>Guarda tu código y llega puntual al punto de encuentro.</p>
+              <p>Revisa el estado del pago y llega puntual al punto de encuentro cuando tu reserva esté confirmada.</p>
             </div>
             {!state.user ? (
               <EmptyState
@@ -2600,10 +2608,11 @@ export default function App() {
               />
             ) : (
               <div className="orders-list">
-                {state.orders.map((order) => (
+                {state.orders.map((order, index) => (
                   <OrderCard
                     key={order.id}
                     order={order}
+                    showPayment={!order.paymentCheckoutId || state.orders.findIndex((candidate) => candidate.paymentCheckoutId === order.paymentCheckoutId) === index}
                     onReviewed={async () => {
                       invalidateCache("orders:");
                       await Promise.all([loadOrders(ordersPage, true), refreshCatalog(true, true)]);
@@ -3088,11 +3097,49 @@ function RatingInput({
   );
 }
 
+function PaymentInstructions({ order, onUploaded }: { order: Order; onUploaded: () => Promise<void> }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!order.paymentCheckoutId || order.paymentStatus !== "awaiting_proof") return null;
+  async function upload() {
+    if (!file || !order.paymentCheckoutId) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (file.size > 2_000_000 || !["image/png", "image/jpeg"].includes(file.type))
+        throw new Error("El comprobante debe ser PNG o JPG de hasta 2 MB.");
+      const response = await fetch(`/api/payments/${order.paymentCheckoutId}/proof`, {
+        method: "POST", headers: { "Content-Type": file.type }, body: file,
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "No pudimos subir el comprobante.");
+      await onUploaded();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No pudimos subir el comprobante.");
+    } finally { setBusy(false); }
+  }
+  return <section className="yape-payment" aria-label="Pago anticipado con Yape">
+    <h3>Completa tu pago con Yape</h3>
+    <p>Yapea <strong>{money(order.paymentAmountSoles ?? order.totalSoles)}</strong> a Fernando Wilder Altamirano Pinedo y sube el comprobante antes de {order.paymentExpiresAt ? new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", hour: "numeric", minute: "2-digit" }).format(new Date(order.paymentExpiresAt)).replace(/([ap])\.\s*m\./gi, "$1.m.") : "que termine el plazo"}.</p>
+    <img className="yape-qr" src="/images/yape-fernando.jpeg" alt="QR de Yape de Fernando Wilder Altamirano Pinedo" />
+    <a className="yape-download" href="/images/yape-fernando.jpeg" download="menuu-yape-fernando.jpeg">Descargar QR</a>
+    <p>Elige una forma de usar el QR en Yape:</p>
+    <ol><li><strong>Escanear QR:</strong> apunta tu cámara al código si usas otro dispositivo.</li><li><strong>Subir una imagen con QR:</strong> descarga la foto y súbela en Yape si pagas desde este celular.</li></ol>
+    <p>Confirma el destinatario y el monto en Yape. Luego sube aquí una imagen del comprobante del pago realizado.</p>
+    <label className="yape-upload">Comprobante de Yape (PNG o JPG, hasta 2 MB)<input type="file" accept="image/png,image/jpeg" onChange={(event) => setFile(event.target.files?.[0] || null)} /></label>
+    <Button onClick={upload} disabled={!file || busy}>{busy ? "Subiendo…" : "Enviar comprobante"}</Button>
+    {error && <p className="form-error" role="alert">{error}</p>}
+  </section>;
+}
+
 function OrderCard({
   order,
+  showPayment,
   onReviewed,
 }: {
   order: Order;
+  showPayment: boolean;
   onReviewed: () => Promise<void>;
 }) {
   const [kitchenRating, setKitchenRating] = useState(0);
@@ -3117,9 +3164,11 @@ function OrderCard({
           ? "Entrega por confirmar"
           : order.status === "cancelado"
             ? "Cancelado"
+            : order.paymentStatus === "awaiting_proof" ? "Falta comprobante"
+            : order.paymentStatus === "under_review" ? "Pago en revisión"
             : "Reservado";
   const settled = order.status !== "reservado";
-  const canCancel = order.status === "reservado" && !afterDelivery;
+  const canCancel = order.status === "reservado" && !afterDelivery && !order.paymentCheckoutId;
   async function cancelReservation() {
     setCancelBusy(true);
     setError("");
@@ -3202,9 +3251,15 @@ function OrderCard({
         </div>
       </div>
       <div className="order-foot">
-        <span>{order.payment}</span>
+        <span>{order.paymentCheckoutId ? `Yape anticipado · ${order.paymentStatus === "approved" ? "aprobado" : order.paymentStatus === "under_review" ? "en revisión" : order.paymentStatus === "awaiting_proof" ? "falta comprobante" : order.paymentStatus === "expired" ? "plazo vencido" : "rechazado"}` : order.payment}</span>
         <strong>Total {money(order.totalSoles)}</strong>
       </div>
+      {showPayment && <PaymentInstructions order={order} onUploaded={onReviewed} />}
+      {showPayment && order.paymentStatus === "under_review" && <p className="yape-status" role="status">Recibimos tu comprobante. Confirmaremos la reserva cuando se verifique el Yape.</p>}
+      {showPayment && order.paymentStatus === "rejected" && <p className="form-error" role="alert">El comprobante fue rechazado: {order.paymentReviewNote}. Si ya yapeaste, contacta a Menúu para revisar el movimiento.</p>}
+      {showPayment && order.paymentStatus === "expired" && <p className="form-error" role="status">El plazo para subir el comprobante terminó y se liberó el cupo. Si ya yapeaste, contacta a Menúu.</p>}
+      {order.paymentStatus === "approved" && <p className="yape-status">Pago anticipado aprobado. Solo falta recoger tu pedido.</p>}
+      {showPayment && order.paymentStatus === "approved" && order.status === "reservado" && <p className="yape-cancel-note">Si necesitas cancelar este pedido pagado, contacta a Menúu para coordinar la devolución.</p>}
       {canCancel && (
         <div className="order-cancel">
           {cancelOpen ? (

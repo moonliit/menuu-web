@@ -75,6 +75,7 @@ export async function dispatchPickupReminders(now = new Date(), send = webpush.s
        (SELECT group_concat(dish_name, ', ') FROM order_items WHERE order_id=r.id) AS dishes
      FROM orders r JOIN push_subscriptions s ON s.user_id=r.user_id
      WHERE r.status='reservado' AND r.fulfillment_status='pending'
+       AND (r.payment_checkout_id IS NULL OR EXISTS(SELECT 1 FROM payment_checkouts p WHERE p.id=r.payment_checkout_id AND p.status='approved'))
        AND r.offer_date BETWEEN $1 AND $2`,
     [startDate, endDate],
   );

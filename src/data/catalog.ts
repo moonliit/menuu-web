@@ -104,6 +104,11 @@ export type Order = {
   reviewEnabled: boolean;
   kitchenRating: number | null;
   payment: string;
+  paymentCheckoutId: string | null;
+  paymentStatus: "awaiting_proof" | "under_review" | "approved" | "rejected" | "expired" | null;
+  paymentExpiresAt: string | null;
+  paymentReviewNote: string | null;
+  paymentAmountSoles: number | null;
   items: OrderItem[];
   totalSoles: number;
   createdAt: string;

@@ -90,12 +90,14 @@ if (!process.env.MENUU_TEST_DB_PATH) {
   const { kitchenData, kitchenImage, saveDish, saveKitchenImage, saveOffer } =
     await import("../server/kitchen.mjs");
   const {
+    addExtraPortion,
     addKitchenReservation,
     kitchenStudentCandidates,
     updateKitchenReservation,
   } = await import("../server/kitchen.mjs");
   const { handleRequest } = await import("../server/index.mjs");
   const { dispatchPickupReminders, savePushSubscription, validDispatchSecret } = await import("../server/push.mjs");
+  const { submitPaymentProof, reviewPayment, pendingPayments, expireUnpaidCheckouts, paymentProof } = await import("../server/payments.mjs");
 
   try {
     const migrationDb = getDb();
@@ -211,6 +213,25 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     );
 
     assert.equal(first.length, 1);
+    assert.equal(first[0].paymentStatus, "awaiting_proof");
+    await db.query(
+      "INSERT INTO users(id,name,email,password_hash,role) VALUES('payment-reviewer','Revisor de pagos','pagos@menuu.test','hash','admin')",
+    );
+    await submitPaymentProof(
+      consumers[0].id,
+      first[0].paymentCheckoutId,
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG1sAAAAASUVORK5CYII=", "base64"),
+      "image/png",
+    );
+    assert.equal((await pendingPayments()).length, 1);
+    assert.equal((await paymentProof(first[0].paymentCheckoutId, { id: consumers[0].id, role: "consumer" })).mime, "image/png");
+    await assert.rejects(paymentProof(first[0].paymentCheckoutId, { id: consumers[1].id, role: "consumer" }), { status: 404 });
+    await assert.rejects(
+      reviewPayment(first[0].paymentCheckoutId, "payment-reviewer", "rejected"),
+      { status: 400 },
+    );
+    await reviewPayment(first[0].paymentCheckoutId, "payment-reviewer", "approved");
+    assert.equal((await getOrders(consumers[0].id))[0].paymentStatus, "approved");
     assert.deepEqual(
       await createBooking(
         consumers[0].id,
@@ -298,6 +319,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       ).rows[0].reserved,
       1,
     );
+    const concurrent = simultaneous.find((outcome) => outcome.status === "fulfilled").value[0];
+    const concurrentOwner = (await db.query("SELECT user_id AS id FROM orders WHERE id=$1", [concurrent.id])).rows[0].id;
+    await submitPaymentProof(concurrentOwner, concurrent.paymentCheckoutId,
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG1sAAAAASUVORK5CYII=", "base64"), "image/png");
+    await reviewPayment(concurrent.paymentCheckoutId, "payment-reviewer", "approved");
     const data = await kitchenData("test-kitchen");
 
     assert.equal(data.analytics.totalOrders, 2);
@@ -685,9 +711,9 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       );
       assert.equal(
         (await kitchenStudentCandidates("test-kitchen", offerId, "pre@")).some(
-          (student) => student.id === preUser.id,
+          (student) => student.id === preUser.id && student.alreadyAdded,
         ),
-        false,
+        true,
       );
       assert.equal(
         (
@@ -1123,8 +1149,40 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+    const extraDate = new Date(Date.parse(`${offerDate}T12:00:00Z`) + 2 * 86400_000).toISOString().slice(0, 10);
+    const extraOffer = await saveOffer("test-kitchen", {
+      dishId, date: extraDate, deliveryTime: "13:00", pickupUntil: "13:10",
+      bookingDeadline: `${extraDate}T12:00:00-05:00`, capacity: 2,
+    });
+    const prepaid = (await createBooking(consumers[0].id,
+      [{ offeringId: extraOffer, quantity: 1, choices: {} }], "extra-prepaid-test"))[0];
+    await submitPaymentProof(consumers[0].id, prepaid.paymentCheckoutId,
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG1sAAAAASUVORK5CYII=", "base64"), "image/png");
+    await reviewPayment(prepaid.paymentCheckoutId, "payment-reviewer", "approved");
+    const prepaidItem = (await db.query("SELECT id FROM order_items WHERE order_id=$1", [prepaid.id])).rows[0];
+    const extraSale = await addExtraPortion("test-kitchen", "kitchen-actor", {
+      orderId: prepaid.id, orderItemId: prepaidItem.id, quantity: 1, paymentMethod: "Efectivo",
+    }, new Date(`${extraDate}T13:05:00-05:00`));
+    const extraSaved = (await db.query(
+      "SELECT payment_recorded AS payment,payment_checkout_id AS checkout FROM orders WHERE id=$1", [extraSale.orderId],
+    )).rows[0];
+    assert.equal(extraSaved.payment, "Efectivo");
+    assert.equal(extraSaved.checkout, null);
+    assert.equal((await getOrders(consumers[0].id)).find((order) => order.id === prepaid.id).paymentStatus, "approved");
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [extraOffer])).rows[0].count, 2);
+    const expiryDate = new Date(Date.parse(`${offerDate}T12:00:00Z`) + 3 * 86400_000).toISOString().slice(0, 10);
+    const expiryOffer = await saveOffer("test-kitchen", {
+      dishId, date: expiryDate, deliveryTime: "13:00", pickupUntil: "13:10",
+      bookingDeadline: `${expiryDate}T12:00:00-05:00`, capacity: 1,
+    });
+    const unpaid = (await createBooking(consumers[0].id,
+      [{ offeringId: expiryOffer, quantity: 1, choices: {} }], "expiry-prepaid-test"))[0];
+    await db.query("UPDATE payment_checkouts SET expires_at='2020-01-01T00:00:00Z' WHERE id=$1", [unpaid.paymentCheckoutId]);
+    await expireUnpaidCheckouts();
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [expiryOffer])).rows[0].count, 0);
+    assert.equal((await getOrders(consumers[0].id)).find((order) => order.id === unpaid.id).paymentStatus, "expired");
     console.log(
-      "libSQL: migración, catálogo, reserva, idempotencia, cupo, estadísticas, imagen y reseña correctos.",
+      "libSQL: migración, reserva, Yape, aprobación, porción adicional y vencimiento correctos.",
     );
   } finally {
     await closeDb();

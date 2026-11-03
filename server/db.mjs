@@ -11,6 +11,8 @@ const booleanColumns = new Set([
   "bookingAllowed",
   "reviewEnabled",
   "manualAdded",
+  "extraPortion",
+  "alreadyAdded",
 ]);
 
 function values(args) {

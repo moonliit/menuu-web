@@ -35,7 +35,7 @@ TURSO_AUTH_TOKEN=...
 
 La función aplica las migraciones al recibir su primera petición. Una base nueva comienza sin usuarios ni menús. No subas `local.db`, `.env` ni el token al repositorio. Comprueba `/api/bootstrap` en la URL desplegada: debe responder JSON con `catalog.kitchens` y `catalog.offerings`, inicialmente vacíos. Si devuelve un error, revisa los registros de la función en Vercel.
 
-La app guarda reservas en transacciones de escritura libSQL. Cada reserva comprueba otra vez el plazo y el cupo, actualiza el stock de forma condicionada y crea el pedido en la misma transacción. Una clave de solicitud hace seguros los reintentos. El servidor valida también las opciones de personalización y los precios. El pago por QR se hace al recibir la comida; esta web no procesa pagos.
+La app guarda reservas en transacciones de escritura libSQL. Cada reserva comprueba otra vez el plazo y el cupo, actualiza el stock de forma condicionada y crea el pedido en la misma transacción. Una clave de solicitud hace seguros los reintentos. El servidor valida también las opciones de personalización y los precios. Las reservas previas requieren Yape al QR de Fernando Wilder Altamirano Pinedo y un comprobante PNG/JPG. El cupo se aparta durante 15 minutos para subirlo; admin contrasta el movimiento recibido y aprueba o rechaza el pago. La web no ejecuta el yapeo. Tras aprobarlo, solo falta registrar la entrega. Los medios de pago anteriores permanecen y las ventas adicionales en el recojo registran su propio método.
 
 ## Avisos de recojo
 
@@ -53,6 +53,6 @@ Los consumidores ven esta semana y la siguiente. Una cocina puede publicar plato
 
 ## Administración
 
-El tercer rol, `admin`, entra por `#admin` y ve los pedidos de la semana actual y la siguiente de todas las cocinas. Puede ajustar cupos y gestionar altas manuales, entregas, ausencias y pagos. Las cocinas siguen limitadas a sus propios menús. Ambos paneles permiten actualizar la lista de estudiantes cuando alguien acaba de registrarse. No existe registro público de admins.
+El tercer rol, `admin`, entra por `#admin` y ve los pedidos de la semana actual y la siguiente de todas las cocinas. Su bandeja de Yapes por revisar es independiente de la lista de entregas; puede ver el comprobante y aprobar o rechazar con motivo. También puede ajustar cupos y gestionar altas manuales, entregas, ausencias y pagos de ventas en el recojo. Las cocinas siguen limitadas a sus propios menús. Ambos paneles permiten actualizar la lista de estudiantes cuando alguien acaba de registrarse. Una cuenta ya añadida aparece con ese aviso y, si su Yape está aprobado, puede comprar otra porción durante el recojo con un pago separado. No existe registro público de admins.
 
 Para crear una cuenta admin, define `MENUU_ADMIN_DATABASE_URL` con la URL libSQL elegida, `MENUU_ADMIN_EMAIL` y `MENUU_ADMIN_PASSWORD` (mínimo 12 caracteres); para Turso remoto define además `MENUU_ADMIN_AUTH_TOKEN`. Ejecuta `npm run admin:create`. El comando exige la URL explícita y no imprime la contraseña. Comprueba que la URL corresponde al entorno deseado antes de ejecutarlo.

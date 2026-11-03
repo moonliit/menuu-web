@@ -37,12 +37,15 @@ export async function adminData({ week = null, kitchen = "all", limit = 20, offs
   const offerIds = offers.rows.map((offer) => offer.id);
   const reservations = offerIds.length ? await getDb().query(
       `SELECT i.offer_id AS "offerId",i.id AS "orderItemId",r.id AS "orderId",r.code,
-       u.name AS "studentName",u.email AS "studentEmail",i.quantity,
+       u.name AS "studentName",u.email AS "studentEmail",i.quantity,i.unit_price_cents AS "unitPriceCents",
        i.delivered_quantity AS "deliveredQuantity",i.booking_deadline_at AS "bookingDeadlineAt",
        r.status,r.fulfillment_status AS "fulfillmentStatus",r.payment_recorded AS "paymentRecorded",r.delivered_at AS "deliveredAt",
+       r.payment_checkout_id AS "paymentCheckoutId",p.status AS "paymentStatus",
        r.created_at AS "createdAt",
-       EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_add') AS "manualAdded"
+       EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_add') AS "manualAdded",
+       EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='extra_portion') AS "extraPortion"
        FROM orders r JOIN order_items i ON i.order_id=r.id
+       LEFT JOIN payment_checkouts p ON p.id=r.payment_checkout_id
        JOIN users u ON u.id=r.user_id JOIN offers o ON o.id=i.offer_id
        WHERE i.offer_id=ANY($1::text[])
        ORDER BY o.offer_date,o.delivery_time,u.name,r.created_at`,

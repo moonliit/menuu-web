@@ -17,7 +17,7 @@ export async function cachedRequest<T>(
   force = false,
 ): Promise<T> {
   const entry = entries.get(key);
-  if (entry?.pending) return entry.pending as Promise<T>;
+  if (entry?.pending && !force) return entry.pending as Promise<T>;
   if (!force && entry?.value !== undefined && entry.expiresAt > Date.now())
     return entry.value as T;
   const pending = load();

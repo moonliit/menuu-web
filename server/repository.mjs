@@ -127,6 +127,7 @@ export async function getCatalog(now = new Date()) {
       .query(`SELECT f.kitchen_id AS "kitchenId", f.dish_id AS "dishId", sum(i.quantity) AS units
       FROM order_items i JOIN orders o ON o.id=i.order_id JOIN offers f ON f.id=i.offer_id
       WHERE o.status='reservado' AND o.fulfillment_status='delivered'
+        AND (o.payment_checkout_id IS NULL OR EXISTS(SELECT 1 FROM payment_checkouts p WHERE p.id=o.payment_checkout_id AND p.status='approved'))
       GROUP BY f.kitchen_id,f.dish_id ORDER BY units DESC, f.kitchen_id,f.dish_id`),
     getDb().query(
       `SELECT CASE WHEN f.offer_date < date($1, '+7 days') THEN 0 ELSE 1 END AS week,
@@ -135,6 +136,7 @@ export async function getCatalog(now = new Date()) {
       FROM order_items i JOIN orders o ON o.id=i.order_id JOIN offers f ON f.id=i.offer_id
       WHERE f.offer_date >= $1 AND f.offer_date < date($1, '+14 days')
         AND o.status='reservado' AND o.fulfillment_status <> 'no_show'
+        AND (o.payment_checkout_id IS NULL OR EXISTS(SELECT 1 FROM payment_checkouts p WHERE p.id=o.payment_checkout_id AND p.status='approved'))
       GROUP BY week, f.kitchen_id, f.dish_id
       ORDER BY week, units DESC, "orderCount" DESC, f.kitchen_id, f.dish_id`,
       [start],
@@ -282,11 +284,12 @@ export async function removeSession(token) {
 export async function cancelOrder(userId, orderId) {
   return transaction(async (db) => {
     const order = (await db.query(
-      `SELECT id,kitchen_id AS "kitchenId",offer_date AS date,delivery_time AS "deliveryTime",status,
+      `SELECT id,kitchen_id AS "kitchenId",payment_checkout_id AS "paymentCheckoutId",offer_date AS date,delivery_time AS "deliveryTime",status,
        fulfillment_status AS "fulfillmentStatus" FROM orders WHERE id=$1 AND user_id=$2`,
       [orderId, userId],
     )).rows[0];
     if (!order) throw invalid("Reserva no encontrada.", 404);
+    if (order.paymentCheckoutId) throw invalid("Para cancelar una reserva con Yape, contacta a Menúu para coordinar la devolución.", 409);
     if (order.status !== "reservado" || order.fulfillmentStatus !== "pending")
       throw invalid("Esta reserva ya no se puede cancelar.", 409);
     if (deliveryMoment(order.date, order.deliveryTime).getTime() <= Date.now())
@@ -308,9 +311,12 @@ export async function getOrders(userId, page = null) {
     `SELECT o.id,o.code,o.kitchen_id AS "kitchenId",o.kitchen_name AS "kitchenName",
     o.offer_date AS date,o.delivery_time AS "deliveryTime",
     o.pickup_until AS "pickupUntil",o.pickup_point AS "pickupPoint",o.status,COALESCE(o.payment_recorded,o.payment) AS payment,
+    o.payment_checkout_id AS "paymentCheckoutId",p.status AS "paymentStatus",p.expires_at AS "paymentExpiresAt",p.review_note AS "paymentReviewNote",p.amount_cents AS "paymentAmountCents",
     o.fulfillment_status AS "fulfillmentStatus",o.review_enabled AS "reviewEnabled",r.kitchen_rating AS "kitchenRating",
     o.total_cents AS "totalCents",o.created_at AS "createdAt" FROM orders o
-    LEFT JOIN order_reviews r ON r.order_id=o.id WHERE o.user_id=$1 ORDER BY o.created_at DESC,o.id DESC${paged ? " LIMIT $2 OFFSET $3" : ""}`,
+    LEFT JOIN order_reviews r ON r.order_id=o.id
+    LEFT JOIN payment_checkouts p ON p.id=o.payment_checkout_id
+    WHERE o.user_id=$1 ORDER BY o.created_at DESC,o.id DESC${paged ? " LIMIT $2 OFFSET $3" : ""}`,
     paged ? [userId, page.limit, page.offset] : [userId],
   );
 
@@ -372,6 +378,11 @@ export async function getOrders(userId, page = null) {
     pickupPoint: row.pickupPoint,
     status: row.status,
     payment: row.payment,
+    paymentCheckoutId: row.paymentCheckoutId,
+    paymentStatus: row.paymentStatus,
+    paymentExpiresAt: row.paymentExpiresAt,
+    paymentReviewNote: row.paymentReviewNote,
+    paymentAmountSoles: row.paymentAmountCents === null ? null : soles(row.paymentAmountCents),
     fulfillmentStatus: row.fulfillmentStatus,
     reviewEnabled: row.reviewEnabled,
     kitchenRating: row.kitchenRating,
@@ -627,6 +638,14 @@ export async function createBooking(userId, payload, requestKey = null) {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     }
+    const checkoutId = randomUUID();
+    const checkoutAmount = items.reduce((sum, item) => sum + item.totalCents, 0);
+    if (checkoutAmount <= 0) throw invalid("El total del pedido debe ser mayor que cero.");
+    const paymentExpiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+    await client.query(
+      "INSERT INTO payment_checkouts(id,user_id,amount_cents,status,expires_at) VALUES($1,$2,$3,'awaiting_proof',$4)",
+      [checkoutId, userId, checkoutAmount, paymentExpiresAt],
+    );
     const created = [];
 
     for (const group of groups.values()) {
@@ -641,14 +660,17 @@ export async function createBooking(userId, payload, requestKey = null) {
         pickupUntil: group[0].pickupUntil,
         pickupPoint: "Entrada del Comedor UTEC en piso 2",
         status: "reservado",
-        payment: "QR al recibir",
+        payment: "Yape anticipado",
+        paymentCheckoutId: checkoutId,
+        paymentStatus: "awaiting_proof",
+        paymentExpiresAt,
         totalCents: group.reduce((sum, item) => sum + item.totalCents, 0),
         createdAt: new Date().toISOString(),
       };
 
       await client.query(
-        `INSERT INTO orders (id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        `INSERT INTO orders (id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,created_at,payment_checkout_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           order.id,
           order.code,
@@ -663,6 +685,7 @@ export async function createBooking(userId, payload, requestKey = null) {
           order.payment,
           order.totalCents,
           order.createdAt,
+          checkoutId,
         ],
       );
       const visibleItems = [];
@@ -721,6 +744,9 @@ export async function createBooking(userId, payload, requestKey = null) {
         pickupPoint: order.pickupPoint,
         status: order.status,
         payment: order.payment,
+        paymentCheckoutId: checkoutId,
+        paymentStatus: "awaiting_proof",
+        paymentExpiresAt,
         totalSoles: soles(order.totalCents),
         createdAt: order.createdAt,
         items: visibleItems,
