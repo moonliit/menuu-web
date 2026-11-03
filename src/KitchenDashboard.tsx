@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -34,6 +35,8 @@ import {
   type User,
 } from "./data/catalog";
 import "./kitchen.css";
+import "./admin.css";
+import { cachedRequest, invalidateCache } from "./data/queryCache";
 
 type Dish = {
   id: string;
@@ -61,6 +64,83 @@ type Offer = {
   publishedAt: string | null;
   soldOutAt: string | null;
 };
+type KitchenReservation = {
+  offerId: string;
+  orderItemId: number;
+  orderId: string;
+  code: string;
+  studentName: string;
+  studentEmail: string;
+  quantity: number;
+  deliveredQuantity: number | null;
+  bookingDeadlineAt: string | null;
+  status: string;
+  fulfillmentStatus: "pending" | "delivered" | "no_show";
+  paymentRecorded: string | null;
+  deliveredAt: string | null;
+  createdAt: string;
+  manualAdded: boolean;
+};
+type ReservationState = "pending" | "delivered" | "cancelled";
+const limaDeliveryInput = (value: string) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const part = (type: string) =>
+    parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
+};
+const deliveredAtLabel = (value: string) =>
+  new Intl.DateTimeFormat("es-PE", {
+    timeZone: "America/Lima",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+    .format(new Date(value))
+    .replace(/([ap])\.\s*m\./gi, "$1.m.");
+const reservationState = (item: KitchenReservation): ReservationState =>
+  item.status !== "reservado" || item.fulfillmentStatus === "no_show"
+    ? "cancelled"
+    : item.fulfillmentStatus === "delivered"
+      ? "delivered"
+      : "pending";
+const deliveredUnitsForOffer = (
+  reservations: KitchenReservation[],
+  offerId: string,
+) =>
+  reservations
+    .filter(
+      (item) =>
+        item.offerId === offerId &&
+        item.status === "reservado" &&
+        item.fulfillmentStatus === "delivered",
+    )
+    .reduce((sum, item) => sum + (item.deliveredQuantity ?? item.quantity), 0);
+const onTimeReservationsForOffer = (
+  reservations: KitchenReservation[],
+  offer: Offer,
+) =>
+  new Set(
+    reservations
+      .filter(
+        (item) =>
+          item.offerId === offer.id &&
+          item.status === "reservado" &&
+          item.fulfillmentStatus !== "no_show" &&
+          new Date(item.createdAt).getTime() <=
+            new Date(item.bookingDeadlineAt || offer.bookingDeadline).getTime(),
+      )
+      .map((item) => item.orderId),
+  ).size;
 type StatOffer = {
   id: string;
   dishId: string;
@@ -85,12 +165,22 @@ type Data = {
   };
   dishes: Dish[];
   offers: Offer[];
+  reservations: KitchenReservation[];
   analytics: {
     offers: StatOffer[];
     bookingHours: { hour: number; units: number }[];
     bookingTimeline: { offerId: string; hour: string; units: number }[];
     totalOrders: number;
   };
+};
+type KitchenPayload = Omit<Data, "analytics"> & {
+  analytics: Data["analytics"] | null;
+};
+const emptyAnalytics: Data["analytics"] = {
+  offers: [],
+  bookingHours: [],
+  bookingTimeline: [],
+  totalOrders: 0,
 };
 export type KitchenSection =
   "inicio" | "menu" | "platos" | "estadisticas" | "cuenta";
@@ -211,6 +301,7 @@ function KitchenSelect({
   placeholder,
   options,
   onChange,
+  withinDialog = false,
 }: {
   id: string;
   label: string;
@@ -218,19 +309,80 @@ function KitchenSelect({
   placeholder?: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
+  withinDialog?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [popupPosition, setPopupPosition] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (!open || !withinDialog) return;
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const bounds = trigger.getBoundingClientRect();
+      const gap = 6;
+      const edge = 12;
+      const desiredHeight = Math.min(250, options.length * 44 + 14);
+      const below = window.innerHeight - bounds.bottom - gap - edge;
+      const above = bounds.top - gap - edge;
+      const openUp = below < desiredHeight && above > below;
+      const maxHeight = Math.max(
+        44,
+        Math.min(desiredHeight, openUp ? above : below),
+      );
+      const nextPosition: {
+        top?: number;
+        bottom?: number;
+        left: number;
+        width: number;
+        maxHeight: number;
+      } = {
+        ...(openUp
+          ? { bottom: window.innerHeight - bounds.top + gap }
+          : { top: bounds.bottom + gap }),
+        left: Math.max(
+          edge,
+          Math.min(bounds.left, window.innerWidth - bounds.width - edge),
+        ),
+        width: Math.min(bounds.width, window.innerWidth - edge * 2),
+        maxHeight,
+      };
+      setPopupPosition((current) =>
+        current?.top === nextPosition.top &&
+        current?.bottom === nextPosition.bottom &&
+        current?.left === nextPosition.left &&
+        current?.width === nextPosition.width &&
+        current?.maxHeight === nextPosition.maxHeight
+          ? current
+          : nextPosition,
+      );
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    document.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      document.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, withinDialog, options.length]);
   useEffect(() => {
-    if (open)
+    if (open && !wasOpen.current)
       optionRefs.current[
         Math.max(
           0,
           options.findIndex((option) => option.value === value),
         )
       ]?.focus();
-  }, [open, options, value]);
+    wasOpen.current = open;
+  });
   const focusOption = (index: number) =>
     optionRefs.current[(index + options.length) % options.length]?.focus();
   const selected = options.find((option) => option.value === value);
@@ -269,10 +421,18 @@ function KitchenSelect({
       </button>
       {open && (
         <div
-          className="km-select-options"
+          className={`km-select-options${withinDialog ? " km-select-options-dialog" : ""}`}
           id={`${id}-options`}
           role="listbox"
           aria-labelledby={`${id}-label`}
+          style={
+            withinDialog
+              ? {
+                  ...popupPosition,
+                  visibility: popupPosition ? "visible" : "hidden",
+                }
+              : undefined
+          }
         >
           {options.map((option, index) => (
             <button
@@ -283,6 +443,7 @@ function KitchenSelect({
               type="button"
               role="option"
               aria-selected={value === option.value}
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 onChange(option.value);
                 setOpen(false);
@@ -387,10 +548,12 @@ function KitchenOfferPreview({
   offer,
   dish,
   kind,
+  deliveredCount,
 }: {
   offer: Offer;
   dish?: Dish;
   kind: "published" | "reserved";
+  deliveredCount: number;
 }) {
   const available = Math.max(0, offer.capacity - offer.reservedCount);
   return (
@@ -412,7 +575,7 @@ function KitchenOfferPreview({
         <div
           className="km-occupancy"
           role="img"
-          aria-label={`${offer.reservedCount} de ${offer.capacity} porciones reservadas`}
+          aria-label={`${offer.reservedCount} de ${offer.capacity} porciones de cupo ocupado`}
         >
           <i
             style={{
@@ -422,8 +585,8 @@ function KitchenOfferPreview({
         </div>
         <small>
           {kind === "published"
-            ? `${offer.reservedCount} de ${offer.capacity} reservadas · ${available} sin reservar`
-            : `${offer.reservedCount} de ${offer.capacity} porciones reservadas`}
+            ? `${deliveredCount} entregadas · ${offer.reservedCount} de ${offer.capacity} cupos ocupados · ${available} libres`
+            : `${deliveredCount} entregadas · ${offer.reservedCount} cupos ocupados`}
         </small>
       </div>
     </article>
@@ -450,7 +613,7 @@ function KitchenHome({ data, today }: { data: Data; today: string }) {
     );
   const reserved = upcoming.filter((offer) => offer.reservedCount > 0);
   const reservedCount = upcoming.reduce(
-    (sum, offer) => sum + offer.reservedCount,
+    (sum, offer) => sum + deliveredUnitsForOffer(data.reservations, offer.id),
     0,
   );
   const unreserved = upcoming.reduce(
@@ -470,9 +633,9 @@ function KitchenHome({ data, today }: { data: Data; today: string }) {
         </div>
         <div>
           <BrandOrdersIcon size={24} />
-          <span>Porciones reservadas</span>
+          <span>Porciones entregadas</span>
           <strong>{reservedCount}</strong>
-          <small>Para los próximos recojos</small>
+          <small>De los próximos recojos</small>
         </div>
         <div>
           <BrandDishIcon size={24} />
@@ -501,6 +664,10 @@ function KitchenHome({ data, today }: { data: Data; today: string }) {
                       offer={offer}
                       dish={dish(offer)}
                       kind="published"
+                      deliveredCount={deliveredUnitsForOffer(
+                        data.reservations,
+                        offer.id,
+                      )}
                     />
                   ))}
                 </div>
@@ -532,6 +699,10 @@ function KitchenHome({ data, today }: { data: Data; today: string }) {
                       offer={offer}
                       dish={dish(offer)}
                       kind="reserved"
+                      deliveredCount={deliveredUnitsForOffer(
+                        data.reservations,
+                        offer.id,
+                      )}
                     />
                   ))}
                 </div>
@@ -614,13 +785,21 @@ function KitchenDishPreview({
 function KitchenMenuRow({
   offer,
   dish,
+  onTimeCount,
+  deliveredCount,
   today,
   onEdit,
+  onReservations,
+  reservationsOpen,
 }: {
   offer: Offer;
   dish?: Dish;
+  onTimeCount: number;
+  deliveredCount: number;
   today: string;
   onEdit: () => void;
+  onReservations: () => void;
+  reservationsOpen: boolean;
 }) {
   const past = offer.date < today;
   return (
@@ -651,9 +830,12 @@ function KitchenMenuRow({
       </div>
       <div className="km-menu-count">
         <strong>
-          {offer.reservedCount} de {offer.capacity}
+          {onTimeCount}{" "}
+          {onTimeCount === 1 ? "reserva a tiempo" : "reservas a tiempo"}
         </strong>
-        <small>porciones reservadas</small>
+        <small>
+          {deliveredCount} de {offer.capacity} porciones vendidas
+        </small>
       </div>
       <div className="km-menu-action">
         {past ? (
@@ -663,8 +845,679 @@ function KitchenMenuRow({
             Editar
           </Button>
         )}
+        <Button
+          variant="quiet"
+          onClick={onReservations}
+          aria-expanded={reservationsOpen}
+        >
+          Entregas
+        </Button>
       </div>
     </article>
+  );
+}
+
+function KitchenReservationPanel({
+  offer,
+  reservations,
+  onChanged,
+  onClose,
+  apiPrefix = "/api/kitchen",
+}: {
+  offer: Pick<
+    Offer,
+    "id" | "date" | "pickupUntil" | "capacity" | "reservedCount"
+  >;
+  reservations: KitchenReservation[];
+  onChanged: () => Promise<void>;
+  onClose: () => void;
+  apiPrefix?: "/api/kitchen" | "/api/admin";
+}) {
+  const [search, setSearch] = useState("");
+  const [students, setStudents] = useState<
+    { id: string; name: string; email: string }[]
+  >([]);
+  const [studentTotal, setStudentTotal] = useState(0);
+  const [studentPage, setStudentPage] = useState(0);
+  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [refreshStudents, setRefreshStudents] = useState(0);
+  const [busyOrder, setBusyOrder] = useState("");
+  const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState("all");
+  const [paymentPrompt, setPaymentPrompt] = useState<{
+    orderId: string;
+    orderItemId: number;
+    name: string;
+    extraordinary: boolean;
+    editing: boolean;
+    maxQuantity: number;
+  } | null>(null);
+  const [promptMethod, setPromptMethod] = useState("");
+  const [promptQuantity, setPromptQuantity] = useState("1");
+  const [promptDeliveredAt, setPromptDeliveredAt] = useState("");
+  const [promptError, setPromptError] = useState("");
+  const paymentDialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (paymentPrompt) paymentDialogRef.current?.showModal();
+  }, [paymentPrompt]);
+  useEffect(() => {
+    if (search.trim().length < 2) {
+      setStudents([]);
+      setStudentTotal(0);
+      setLoadingStudents(false);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setLoadingStudents(true);
+      try {
+        const result = await request<{
+          students: typeof students;
+          total: number;
+        }>(
+          `${apiPrefix}/offers/${offer.id}/students?q=${encodeURIComponent(search.trim())}&limit=20&offset=${studentPage * 20}`,
+        );
+        if (active) {
+          setStudents(result.students);
+          setStudentTotal(result.total);
+        }
+      } catch (cause) {
+        if (active)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "No pudimos buscar estudiantes.",
+          );
+      } finally {
+        if (active) setLoadingStudents(false);
+      }
+    }, 220);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [apiPrefix, offer.id, search, studentPage, refreshStudents]);
+  async function change(path: string, payload: unknown, key: string) {
+    setBusyOrder(key);
+    setError("");
+    try {
+      await request(path, payload);
+      await onChanged();
+      setRefreshStudents((value) => value + 1);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "No pudimos guardar la reserva.",
+      );
+    } finally {
+      setBusyOrder("");
+    }
+  }
+  async function addStudent(student: { id: string; name: string }) {
+    setBusyOrder(student.id);
+    setError("");
+    try {
+      const added = await request<{
+        orderId: string;
+        orderItemId: number;
+        extraordinary: boolean;
+      }>(`${apiPrefix}/reservations/add`, {
+        offerId: offer.id,
+        studentId: student.id,
+        quantity: 1,
+      });
+      await onChanged();
+      setRefreshStudents((value) => value + 1);
+      if (added.extraordinary) {
+        setPromptMethod("");
+        setPromptQuantity("1");
+        setPromptDeliveredAt(limaDeliveryInput(new Date().toISOString()));
+        setPromptError("");
+        setPaymentPrompt({
+          orderId: added.orderId,
+          orderItemId: added.orderItemId,
+          name: student.name,
+          extraordinary: true,
+          editing: false,
+          maxQuantity: offer.capacity - offer.reservedCount,
+        });
+      }
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "No pudimos añadir la reserva.",
+      );
+    } finally {
+      setBusyOrder("");
+    }
+  }
+  function openDeliveryPrompt(item: KitchenReservation) {
+    const currentQuantity = item.deliveredQuantity ?? item.quantity;
+    setPromptMethod(item.paymentRecorded || "");
+    setPromptQuantity(String(currentQuantity));
+    setPromptDeliveredAt(
+      limaDeliveryInput(item.deliveredAt || new Date().toISOString()),
+    );
+    setPromptError("");
+    setPaymentPrompt({
+      orderId: item.orderId,
+      orderItemId: item.orderItemId,
+      name: item.studentName,
+      extraordinary:
+        item.manualAdded &&
+        new Date(item.createdAt).getTime() >=
+          new Date(`${offer.date}T${offer.pickupUntil}:00-05:00`).getTime(),
+      editing: item.fulfillmentStatus === "delivered",
+      maxQuantity: Math.max(
+        1,
+        offer.capacity - offer.reservedCount + currentQuantity,
+      ),
+    });
+  }
+  async function savePromptPayment() {
+    if (
+      !paymentPrompt ||
+      !promptMethod ||
+      !Number.isInteger(Number(promptQuantity)) ||
+      Number(promptQuantity) < 1 ||
+      Number(promptQuantity) > paymentPrompt.maxQuantity ||
+      (apiPrefix === "/api/admin" && !promptDeliveredAt)
+    )
+      return;
+    setBusyOrder(paymentPrompt.orderId);
+    setPromptError("");
+    try {
+      await request(`${apiPrefix}/reservations/update`, {
+        orderId: paymentPrompt.orderId,
+        orderItemId: paymentPrompt.orderItemId,
+        action: "deliver",
+        paymentMethod: promptMethod,
+        deliveredQuantity: Number(promptQuantity),
+        ...(apiPrefix === "/api/admin"
+          ? { deliveredAt: promptDeliveredAt }
+          : {}),
+      });
+      await onChanged();
+      paymentDialogRef.current?.close();
+    } catch (cause) {
+      setPromptError(
+        cause instanceof Error
+          ? cause.message
+          : "No pudimos registrar el pago.",
+      );
+    } finally {
+      setBusyOrder("");
+    }
+  }
+  const pickupEndTime = new Date(
+    `${offer.date}T${offer.pickupUntil}:00-05:00`,
+  ).getTime();
+  const pickupEnded = Date.now() >= pickupEndTime;
+  const canAdd = offer.reservedCount < offer.capacity;
+  const activeReservations = reservations.filter(
+    (item) =>
+      item.status === "reservado" && item.fulfillmentStatus !== "no_show",
+  );
+  const filteredReservations = reservations.filter((item) => {
+    const status = reservationState(item);
+    return (
+      (statusFilter === "all" || statusFilter === status) &&
+      (paymentFilter === "all" ||
+        (paymentFilter === "unrecorded"
+          ? !item.paymentRecorded
+          : paymentFilter === item.paymentRecorded))
+    );
+  });
+  return (
+    <section className="km-reservations" aria-label="Gestión de entregas">
+      <div className="km-reservations-head">
+        <div>
+          <span className="eyebrow">ENTREGAS DEL MENÚ</span>
+          <h2>
+            {dateLabel(offer.date, {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+            })}
+          </h2>
+          <p>
+            {activeReservations.length} reservas activas · {offer.reservedCount}{" "}
+            de {offer.capacity} porciones
+            {reservations.length > activeReservations.length &&
+              ` · ${reservations.length - activeReservations.length} canceladas`}
+          </p>
+        </div>
+        <button
+          className="km-icon-button"
+          type="button"
+          onClick={onClose}
+          aria-label="Cerrar entregas"
+        >
+          <X size={20} />
+        </button>
+      </div>
+      {error && (
+        <p className="km-reservations-error" role="alert">
+          {error}
+        </p>
+      )}
+      {reservations.length > 0 && (
+        <div className="km-reservation-filters" aria-label="Filtrar reservas">
+          <KitchenSelect
+            id={`reservation-status-${offer.id}`}
+            label="Estado de entrega"
+            value={statusFilter}
+            options={[
+              { value: "all", label: "Todos los estados" },
+              { value: "pending", label: "Pendientes" },
+              { value: "delivered", label: "Entregadas" },
+              { value: "cancelled", label: "Canceladas" },
+            ]}
+            onChange={setStatusFilter}
+          />
+          <KitchenSelect
+            id={`reservation-payment-${offer.id}`}
+            label="Método de pago"
+            value={paymentFilter}
+            options={[
+              { value: "all", label: "Todos los métodos" },
+              { value: "unrecorded", label: "Sin registrar" },
+              ...["QR", "Efectivo", "Transferencia", "Otro"].map((value) => ({
+                value,
+                label: value,
+              })),
+            ]}
+            onChange={setPaymentFilter}
+          />
+          <span aria-live="polite">
+            {filteredReservations.length} de {reservations.length} pedidos
+          </span>
+        </div>
+      )}
+      {reservations.length ? (
+        <div className="km-reservation-list">
+          {filteredReservations.length ? (
+            filteredReservations.map((item) => {
+              const status = reservationState(item);
+              const state =
+                status === "delivered"
+                  ? item.paymentRecorded
+                    ? "Entregado"
+                    : "Entrega · pago pendiente"
+                  : status === "cancelled"
+                    ? item.status === "cancelado"
+                      ? "Cancelado por estudiante"
+                      : "Cancelado · no vino"
+                    : "Pendiente";
+              return (
+                <article
+                  className={`km-reservation km-reservation-${status}`}
+                  key={item.orderId}
+                >
+                  <div className="km-reservation-person">
+                    <strong>{item.studentName}</strong>
+                    <span>{item.studentEmail}</span>
+                    <small>
+                      {item.quantity}{" "}
+                      {item.quantity === 1 ? "porción" : "porciones"} ·{" "}
+                      {item.code}
+                    </small>
+                    <small>
+                      {item.manualAdded ? "Alta manual" : "Reservada"} ·{" "}
+                      {new Intl.DateTimeFormat("es-PE", {
+                        timeZone: "America/Lima",
+                        day: "numeric",
+                        month: "short",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })
+                        .format(new Date(item.createdAt))
+                        .replace(/([ap])\.\s*m\./gi, "$1.m.")}
+                    </small>
+                  </div>
+                  <div className="km-reservation-manage">
+                    <span className="km-reservation-state">{state}</span>
+                    {apiPrefix === "/api/admin" &&
+                      item.fulfillmentStatus === "delivered" &&
+                      item.status === "reservado" && (
+                        <small className="km-delivery-time">
+                          Entrega:{" "}
+                          {item.deliveredAt
+                            ? deliveredAtLabel(item.deliveredAt)
+                            : "sin fecha registrada"}
+                        </small>
+                      )}
+                    <div className="km-reservation-actions">
+                      {apiPrefix === "/api/admin" &&
+                        item.status === "reservado" &&
+                        item.fulfillmentStatus === "delivered" && (
+                          <Button
+                            variant="secondary"
+                            disabled={!!busyOrder}
+                            onClick={() => openDeliveryPrompt(item)}
+                          >
+                            Editar entrega
+                          </Button>
+                        )}
+                      {item.status === "reservado" &&
+                        item.fulfillmentStatus !== "delivered" &&
+                        item.fulfillmentStatus !== "no_show" && (
+                          <Button
+                            variant="secondary"
+                            disabled={!!busyOrder}
+                            onClick={() => openDeliveryPrompt(item)}
+                          >
+                            Marcar como entregado
+                          </Button>
+                        )}
+                      {item.status === "reservado" &&
+                        item.fulfillmentStatus === "pending" &&
+                        pickupEnded &&
+                        new Date(item.createdAt).getTime() <= pickupEndTime && (
+                          <Button
+                            variant="quiet"
+                            disabled={!!busyOrder}
+                            onClick={() =>
+                              change(
+                                `${apiPrefix}/reservations/update`,
+                                { orderId: item.orderId, action: "cancel" },
+                                item.orderId,
+                              )
+                            }
+                          >
+                            Marcar como no vino
+                          </Button>
+                        )}
+                      {item.status === "reservado" &&
+                        item.fulfillmentStatus !== "pending" && (
+                          <Button
+                            variant="quiet"
+                            disabled={!!busyOrder}
+                            onClick={() =>
+                              change(
+                                `${apiPrefix}/reservations/update`,
+                                { orderId: item.orderId, action: "reset" },
+                                item.orderId,
+                              )
+                            }
+                          >
+                            Corregir estado
+                          </Button>
+                        )}
+                    </div>
+                  </div>
+                  {item.status === "reservado" &&
+                  item.fulfillmentStatus === "delivered" ? (
+                    <div className="km-reservation-delivery-fields">
+                      <KitchenSelect
+                        id={`delivered-${item.orderItemId}`}
+                        label="Porciones entregadas"
+                        value={String(item.deliveredQuantity ?? item.quantity)}
+                        options={Array.from(
+                          {
+                            length: Math.max(
+                              1,
+                              offer.capacity -
+                                offer.reservedCount +
+                                (item.deliveredQuantity ?? item.quantity),
+                            ),
+                          },
+                          (_, index) => ({
+                            value: String(index + 1),
+                            label: String(index + 1),
+                          }),
+                        )}
+                        onChange={(value) =>
+                          item.paymentRecorded
+                            ? change(
+                                `${apiPrefix}/reservations/update`,
+                                {
+                                  orderId: item.orderId,
+                                  orderItemId: item.orderItemId,
+                                  action: "deliver",
+                                  deliveredQuantity: Number(value),
+                                  paymentMethod: item.paymentRecorded,
+                                },
+                                item.orderId,
+                              )
+                            : openDeliveryPrompt(item)
+                        }
+                      />
+                      <KitchenSelect
+                        id={`payment-${item.orderItemId}`}
+                        label="Pago efectuado"
+                        value={item.paymentRecorded || ""}
+                        placeholder="Sin registrar"
+                        options={[
+                          "QR",
+                          "Efectivo",
+                          "Transferencia",
+                          "Otro",
+                        ].map((value) => ({ value, label: value }))}
+                        onChange={(paymentMethod) =>
+                          change(
+                            `${apiPrefix}/reservations/update`,
+                            {
+                              orderId: item.orderId,
+                              action: "payment",
+                              paymentMethod,
+                            },
+                            item.orderId,
+                          )
+                        }
+                      />
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })
+          ) : (
+            <p className="km-empty">No hay reservas con estos filtros.</p>
+          )}
+        </div>
+      ) : (
+        <p className="km-empty">Aún no hay reservas en este menú.</p>
+      )}
+      <div className="km-reservation-add">
+        <div>
+          <h3>Añadir estudiante</h3>
+          <p>
+            Solo aparecen cuentas sin reserva en este menú. Se añade una porción
+            y se descuenta del cupo. También puedes registrar una reserva
+            extraordinaria después de la hora; quedará anotada su fecha y hora.
+          </p>
+        </div>
+        {canAdd ? (
+          <>
+            <div className="km-student-search">
+              <label>
+                Buscar por nombre o correo
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                    setStudentPage(0);
+                  }}
+                  placeholder="Nombre o correo UTEC"
+                />
+              </label>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={loadingStudents || search.trim().length < 2}
+                onClick={() => setRefreshStudents((value) => value + 1)}
+              >
+                {loadingStudents ? "Actualizando…" : "Actualizar estudiantes"}
+              </Button>
+            </div>
+            <div className="km-candidate-list" aria-live="polite">
+              {search.trim().length < 2 ? (
+                <p>Escribe al menos dos caracteres para buscar estudiantes.</p>
+              ) : loadingStudents ? (
+                <p>Buscando estudiantes…</p>
+              ) : students.length ? (
+                students.map((student) => (
+                  <div key={student.id}>
+                    <span>
+                      <strong>{student.name}</strong>
+                      <small>{student.email}</small>
+                    </span>
+                    <Button
+                      variant="secondary"
+                      disabled={!!busyOrder}
+                      onClick={() => addStudent(student)}
+                    >
+                      Añadir
+                    </Button>
+                  </div>
+                ))
+              ) : (
+                <p>No hay estudiantes disponibles con esa búsqueda.</p>
+              )}
+            </div>
+            {studentTotal > 20 && (
+              <nav
+                className="km-candidate-pages"
+                aria-label="Páginas de estudiantes"
+              >
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={studentPage === 0 || loadingStudents}
+                  onClick={() => setStudentPage((page) => page - 1)}
+                >
+                  Anterior
+                </Button>
+                <span>
+                  {studentPage + 1} de {Math.ceil(studentTotal / 20)}
+                </span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={
+                    (studentPage + 1) * 20 >= studentTotal || loadingStudents
+                  }
+                  onClick={() => setStudentPage((page) => page + 1)}
+                >
+                  Siguiente
+                </Button>
+              </nav>
+            )}
+          </>
+        ) : (
+          <p className="km-hint">
+            No se pueden añadir más reservas: el cupo se agotó.
+          </p>
+        )}
+      </div>
+      <dialog
+        ref={paymentDialogRef}
+        className="km-payment-dialog"
+        aria-labelledby="km-payment-title"
+        onClose={() => setPaymentPrompt(null)}
+      >
+        <span className="eyebrow">
+          {paymentPrompt?.extraordinary
+            ? "RESERVA EXTRAORDINARIA"
+            : "ENTREGA DEL PEDIDO"}
+        </span>
+        <h2 id="km-payment-title">
+          {paymentPrompt?.editing ? "Editar entrega" : "Confirma la entrega"}
+        </h2>
+        <p>
+          {paymentPrompt?.editing ? "Corrige" : "Registra"} las porciones
+          entregadas a {paymentPrompt?.name} y cómo pagó.
+        </p>
+        {apiPrefix === "/api/admin" && (
+          <label className="km-delivery-time-field" htmlFor="km-delivered-at">
+            Fecha y hora de entrega
+            <input
+              id="km-delivered-at"
+              type="datetime-local"
+              step="60"
+              min={
+                paymentPrompt?.extraordinary
+                  ? `${offer.date}T${offer.pickupUntil}`
+                  : undefined
+              }
+              max={limaDeliveryInput(new Date().toISOString())}
+              value={promptDeliveredAt}
+              onChange={(event) => setPromptDeliveredAt(event.target.value)}
+            />
+            <small>
+              {paymentPrompt?.extraordinary
+                ? "Hora de Lima. En altas extemporáneas, la reserva toma esta misma hora y no puede ser anterior al fin de recojo."
+                : "Hora de Lima. Puedes corregirla después de entregar."}
+            </small>
+          </label>
+        )}
+        <div className="km-delivered-quantity">
+          <KitchenSelect
+            id="km-delivered-quantity"
+            withinDialog
+            label="Porciones entregadas"
+            value={promptQuantity}
+            options={Array.from(
+              { length: paymentPrompt?.maxQuantity ?? 1 },
+              (_, index) => ({
+                value: String(index + 1),
+                label: String(index + 1),
+              }),
+            )}
+            onChange={setPromptQuantity}
+          />
+          <small>
+            Máximo {paymentPrompt?.maxQuantity ?? 1} según el cupo del menú.
+          </small>
+        </div>
+        <KitchenSelect
+          id="km-extra-payment"
+          withinDialog
+          label="Método de pago"
+          value={promptMethod}
+          placeholder="Selecciona un método"
+          options={["QR", "Efectivo", "Transferencia", "Otro"].map((value) => ({
+            value,
+            label: value,
+          }))}
+          onChange={setPromptMethod}
+        />
+        {promptError && (
+          <p className="km-reservations-error" role="alert">
+            {promptError}
+          </p>
+        )}
+        <div className="km-payment-actions">
+          <Button
+            variant="secondary"
+            onClick={() => paymentDialogRef.current?.close()}
+          >
+            {paymentPrompt?.extraordinary ? "Registrar más tarde" : "Volver"}
+          </Button>
+          <Button
+            onClick={savePromptPayment}
+            disabled={
+              !promptMethod ||
+              !!busyOrder ||
+              !promptQuantity ||
+              !Number.isInteger(Number(promptQuantity)) ||
+              Number(promptQuantity) < 1 ||
+              Number(promptQuantity) > (paymentPrompt?.maxQuantity ?? 1) ||
+              (apiPrefix === "/api/admin" &&
+                (!promptDeliveredAt ||
+                  (paymentPrompt?.extraordinary &&
+                    promptDeliveredAt < `${offer.date}T${offer.pickupUntil}`)))
+            }
+          >
+            {busyOrder ? "Guardando…" : "Guardar entrega"}
+          </Button>
+        </div>
+      </dialog>
+    </section>
   );
 }
 
@@ -981,6 +1834,7 @@ function KitchenProfile({
   const [photoBusy, setPhotoBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const photoInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     setName(profile.name);
     setDescription(profile.description);
@@ -1049,16 +1903,27 @@ function KitchenProfile({
             src={profile.logoUrl || "/images/menuu-logo.png"}
             alt={`Foto de ${profile.name}`}
           />
-          <label className="km-outline-button">
+          <button
+            type="button"
+            className="km-outline-button"
+            disabled={photoBusy}
+            onClick={() => photoInputRef.current?.click()}
+          >
             <BrandCameraIcon size={18} />
             {photoBusy ? "Subiendo…" : "Cambiar foto"}
-            <input
-              type="file"
-              accept="image/png,image/jpeg"
-              disabled={photoBusy}
-              onChange={(event) => changePhoto(event.target.files?.[0])}
-            />
-          </label>
+          </button>
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/png,image/jpeg"
+            hidden
+            disabled={photoBusy}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              void changePhoto(file);
+            }}
+          />
           <small>PNG o JPG · máximo 2 MB</small>
         </div>
         {editing ? (
@@ -1340,12 +2205,10 @@ export default function KitchenDashboard({
   section,
   user,
   onLogout,
-  onChanged,
 }: {
   section: KitchenSection;
   user: User;
   onLogout: () => Promise<void>;
-  onChanged: () => Promise<void>;
 }) {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState("");
@@ -1356,21 +2219,65 @@ export default function KitchenDashboard({
   const [previewDish, setPreviewDish] = useState<Dish | null>(null);
   const [createdDish, setCreatedDish] = useState(false);
   const [offer, setOffer] = useState<Offer | null>(null);
+  const [reservationsOfferId, setReservationsOfferId] = useState<string | null>(
+    null,
+  );
   const [week, setWeek] = useState(0);
   const [photoBusy, setPhotoBusy] = useState(false);
-  const refresh = async () => {
+  const dishPhotoInputRef = useRef<HTMLInputElement>(null);
+  const refresh = async (force = true) => {
     setError("");
-    const next = await request<Data>("/api/kitchen/data");
-    setData(next);
-    await onChanged();
+    if (force) invalidateCache(`kitchen:data:${user.kitchenId}:`);
+    const scope = section === "estadisticas" ? "full" : "operations";
+    const next = await cachedRequest(
+      `kitchen:data:${user.kitchenId}:${scope}`,
+      () =>
+        request<KitchenPayload>(
+          `/api/kitchen/data${scope === "operations" ? "?scope=operations" : ""}`,
+        ),
+      45_000,
+      force,
+    );
+    setData((current) => ({
+      ...next,
+      analytics: next.analytics ?? current?.analytics ?? emptyAnalytics,
+    }));
   };
   useEffect(() => {
-    refresh().catch((cause) =>
+    refresh(false).catch((cause) =>
       setError(
         cause instanceof Error ? cause.message : "No pudimos cargar tu cocina.",
       ),
     );
   }, [user.kitchenId]);
+  useEffect(() => {
+    refresh(false).catch(() => {});
+  }, [section]);
+  useEffect(() => {
+    if (section !== "inicio" && section !== "menu") return;
+    const update = () => {
+      if (!document.hidden)
+        cachedRequest(
+          `kitchen:data:${user.kitchenId}:operations`,
+          () => request<KitchenPayload>("/api/kitchen/data?scope=operations"),
+          45_000,
+          true,
+        )
+          .then((next) =>
+            setData((current) => ({
+              ...next,
+              analytics: current?.analytics ?? emptyAnalytics,
+            })),
+          )
+          .catch(() => {});
+    };
+    const timer = window.setInterval(update, 45_000);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [user.kitchenId, section]);
   const save = async (path: string, payload: unknown, done: () => void) => {
     setBusy(true);
     setError("");
@@ -1701,18 +2608,27 @@ export default function KitchenDashboard({
                             *
                           </span>
                         </span>
-                        <label className="km-outline-button km-upload">
+                        <button
+                          type="button"
+                          className="km-outline-button km-upload"
+                          disabled={photoBusy}
+                          onClick={() => dishPhotoInputRef.current?.click()}
+                        >
                           <BrandCameraIcon size={18} />
                           {photoBusy ? "Subiendo…" : "Subir foto"}
-                          <input
-                            type="file"
-                            accept="image/png,image/jpeg"
-                            disabled={photoBusy}
-                            onChange={(event) =>
-                              changeDishImage(event.target.files?.[0])
-                            }
-                          />
-                        </label>
+                        </button>
+                        <input
+                          ref={dishPhotoInputRef}
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          hidden
+                          disabled={photoBusy}
+                          onChange={(event) => {
+                            const file = event.currentTarget.files?.[0];
+                            event.currentTarget.value = "";
+                            void changeDishImage(file);
+                          }}
+                        />
                         <small>PNG o JPG · máximo 2 MB</small>
                         {dish.imageUrl && (
                           <img
@@ -2083,7 +2999,21 @@ export default function KitchenDashboard({
                       key={item.id}
                       offer={item}
                       dish={data.dishes.find((d) => d.id === item.dishId)}
+                      onTimeCount={onTimeReservationsForOffer(
+                        data.reservations,
+                        item,
+                      )}
+                      deliveredCount={deliveredUnitsForOffer(
+                        data.reservations,
+                        item.id,
+                      )}
                       today={current}
+                      reservationsOpen={reservationsOfferId === item.id}
+                      onReservations={() =>
+                        setReservationsOfferId((current) =>
+                          current === item.id ? null : item.id,
+                        )
+                      }
                       onEdit={() =>
                         setOffer({
                           ...item,
@@ -2093,6 +3023,21 @@ export default function KitchenDashboard({
                       }
                     />
                   ))}
+                  {reservationsOfferId &&
+                    data.offers.find(
+                      (item) => item.id === reservationsOfferId,
+                    ) && (
+                      <KitchenReservationPanel
+                        offer={data.offers.find(
+                          (item) => item.id === reservationsOfferId,
+                        )!}
+                        reservations={data.reservations.filter(
+                          (item) => item.offerId === reservationsOfferId,
+                        )}
+                        onChanged={refresh}
+                        onClose={() => setReservationsOfferId(null)}
+                      />
+                    )}
                 </div>
               ) : (
                 <div className="km-empty">
@@ -2103,6 +3048,370 @@ export default function KitchenDashboard({
           )}
           {section === "estadisticas" && <KitchenStats data={data} />}
         </>
+      )}
+    </section>
+  );
+}
+
+type AdminOffer = Pick<
+  Offer,
+  | "id"
+  | "date"
+  | "deliveryTime"
+  | "pickupUntil"
+  | "bookingDeadline"
+  | "capacity"
+  | "reservedCount"
+> & {
+  kitchenId: string;
+  kitchenName: string;
+  kitchenLogoUrl: string;
+  dishName: string;
+  imageUrl: string;
+  imageAlt: string;
+};
+type AdminData = {
+  weekStart: string;
+  offers: AdminOffer[];
+  reservations: KitchenReservation[];
+  kitchens: { id: string; name: string }[];
+  totalOffers: number;
+  limit: number;
+  offset: number;
+};
+
+function AdminOfferRow({
+  offer,
+  reservations,
+  expanded,
+  onToggle,
+  onChanged,
+}: {
+  offer: AdminOffer;
+  reservations: KitchenReservation[];
+  expanded: boolean;
+  onToggle: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [capacity, setCapacity] = useState(String(offer.capacity));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => setCapacity(String(offer.capacity)), [offer.capacity]);
+  const active = reservations.filter(
+    (item) =>
+      item.status === "reservado" && item.fulfillmentStatus !== "no_show",
+  );
+  async function saveCapacity(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await request("/api/admin/offers/capacity", {
+        offerId: offer.id,
+        capacity: Number(capacity),
+      });
+      await onChanged();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "No pudimos cambiar el cupo.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="admin-offer-group">
+      <article className="admin-offer-row">
+        <img
+          src={offer.imageUrl || "/images/menuu-logo.png"}
+          alt={offer.imageAlt || offer.dishName}
+        />
+        <div className="admin-offer-copy">
+          <span className="admin-kitchen-name">{offer.kitchenName}</span>
+          <h2>{offer.dishName}</h2>
+          <p>
+            {dateLabel(offer.date, {
+              weekday: "short",
+              day: "numeric",
+              month: "short",
+            })}{" "}
+            · {timeLabel(offer.deliveryTime)}–{timeLabel(offer.pickupUntil)}
+          </p>
+        </div>
+        <div className="admin-offer-count">
+          <strong>
+            {active.length} {active.length === 1 ? "pedido" : "pedidos"}
+          </strong>
+          <span>
+            {offer.reservedCount} de {offer.capacity} porciones ocupadas
+          </span>
+        </div>
+        <form className="admin-capacity" onSubmit={saveCapacity}>
+          <label htmlFor={`admin-capacity-${offer.id}`}>Cupo</label>
+          <div>
+            <input
+              id={`admin-capacity-${offer.id}`}
+              type="number"
+              min={Math.max(1, offer.reservedCount)}
+              max="10000"
+              value={capacity}
+              onChange={(event) => setCapacity(event.target.value)}
+            />
+            <Button
+              type="submit"
+              variant="secondary"
+              disabled={busy || Number(capacity) === offer.capacity}
+            >
+              {busy ? "Guardando…" : "Guardar"}
+            </Button>
+          </div>
+        </form>
+        <Button
+          type="button"
+          variant="quiet"
+          onClick={onToggle}
+          aria-expanded={expanded}
+        >
+          {expanded ? "Cerrar entregas" : "Entregas"}
+        </Button>
+      </article>
+      {error && (
+        <p className="km-reservations-error" role="alert">
+          {error}
+        </p>
+      )}
+      {expanded && (
+        <KitchenReservationPanel
+          offer={offer}
+          reservations={reservations}
+          onChanged={onChanged}
+          onClose={onToggle}
+          apiPrefix="/api/admin"
+        />
+      )}
+    </div>
+  );
+}
+
+export function AdminDashboard({
+  user,
+  onLogout,
+}: {
+  user: User;
+  onLogout: () => Promise<void>;
+}) {
+  const [data, setData] = useState<AdminData | null>(null);
+  const [error, setError] = useState("");
+  const [week, setWeek] = useState(0);
+  const [kitchen, setKitchen] = useState("all");
+  const [adminPage, setAdminPage] = useState(0);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const adminQuery = `/api/admin/data?week=${week}&kitchen=${encodeURIComponent(kitchen)}&limit=10&offset=${adminPage * 10}`;
+  const refresh = async (force = true) => {
+    if (force) invalidateCache("admin:data:");
+    const next = await cachedRequest(
+      `admin:data:${adminQuery}`,
+      () => request<AdminData>(adminQuery),
+      30_000,
+      force,
+    );
+    setData(next);
+    setError("");
+  };
+  useEffect(() => {
+    refresh(false).catch((cause) =>
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "No pudimos cargar los pedidos.",
+      ),
+    );
+  }, [user.id, week, kitchen, adminPage]);
+  useEffect(() => {
+    const update = () => {
+      if (!document.hidden)
+        cachedRequest(
+          `admin:data:${adminQuery}`,
+          () => request<AdminData>(adminQuery),
+          30_000,
+          true,
+        )
+          .then(setData)
+          .catch(() => {});
+    };
+    const timer = window.setInterval(update, 45_000);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [user.id, adminQuery]);
+  const kitchens = data?.kitchens || [];
+  const start = data ? weekDate(data.weekStart, week * 7) : "";
+  const end = data ? weekDate(data.weekStart, week * 7 + 5) : "";
+  const visible = data?.offers || [];
+  return (
+    <section
+      className="page-section admin-dashboard"
+      aria-label="Panel de administración"
+    >
+      <div className="page-heading admin-heading">
+        <div>
+          <span className="eyebrow">OPERACIÓN DE MENÚU</span>
+          <h1>Pedidos y entregas</h1>
+          <p>{user.email}</p>
+        </div>
+        <Button type="button" variant="secondary" onClick={onLogout}>
+          <BrandLogoutIcon size={18} /> Cerrar sesión
+        </Button>
+      </div>
+      {error && (
+        <p className="km-alert" role="alert">
+          {error}
+        </p>
+      )}
+      {!data ? (
+        <p className="km-loading" role="status">
+          Cargando pedidos…
+        </p>
+      ) : (
+        <div className="km-workspace">
+          <div className="admin-controls">
+            <div className="km-week-controls">
+              <div role="group" aria-label="Semana">
+                <button
+                  type="button"
+                  className={week === 0 ? "active" : ""}
+                  onClick={() => {
+                    setWeek(0);
+                    setAdminPage(0);
+                    setExpanded(null);
+                  }}
+                >
+                  Esta semana
+                </button>
+                <button
+                  type="button"
+                  className={week === 1 ? "active" : ""}
+                  onClick={() => {
+                    setWeek(1);
+                    setAdminPage(0);
+                    setExpanded(null);
+                  }}
+                >
+                  Próxima semana
+                </button>
+              </div>
+              <span className="km-week-range">
+                {dateLabel(start, { day: "numeric", month: "short" })} –{" "}
+                {dateLabel(end, { day: "numeric", month: "short" })}
+              </span>
+            </div>
+            <label className="admin-kitchen-filter">
+              Cocina
+              <select
+                value={kitchen}
+                onChange={(event) => {
+                  setKitchen(event.target.value);
+                  setAdminPage(0);
+                  setExpanded(null);
+                }}
+              >
+                <option value="all">Todas las cocinas</option>
+                {kitchens.map(({ id, name }) => (
+                  <option value={id} key={id}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() =>
+                refresh().catch((cause) =>
+                  setError(
+                    cause instanceof Error
+                      ? cause.message
+                      : "No pudimos actualizar.",
+                  ),
+                )
+              }
+            >
+              Actualizar pedidos
+            </Button>
+          </div>
+          <p className="admin-summary">
+            {data.totalOffers} {data.totalOffers === 1 ? "menú" : "menús"} en
+            esta selección ·{" "}
+            {visible.reduce(
+              (sum, offer) =>
+                sum +
+                data.reservations.filter(
+                  (item) =>
+                    item.offerId === offer.id &&
+                    item.status === "reservado" &&
+                    item.fulfillmentStatus !== "no_show",
+                ).length,
+              0,
+            )}{" "}
+            pedidos activos en esta página
+          </p>
+          {visible.length ? (
+            visible.map((offer) => (
+              <AdminOfferRow
+                key={offer.id}
+                offer={offer}
+                reservations={data.reservations.filter(
+                  (item) => item.offerId === offer.id,
+                )}
+                expanded={expanded === offer.id}
+                onToggle={() =>
+                  setExpanded((current) =>
+                    current === offer.id ? null : offer.id,
+                  )
+                }
+                onChanged={refresh}
+              />
+            ))
+          ) : (
+            <p className="km-empty">
+              No hay menús de esta cocina en la semana seleccionada.
+            </p>
+          )}
+          {data.totalOffers > 10 && (
+            <nav
+              className="km-pagination"
+              aria-label="Páginas de menús en Admin"
+            >
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={adminPage === 0}
+                onClick={() => {
+                  setAdminPage((page) => page - 1);
+                  setExpanded(null);
+                }}
+              >
+                Anterior
+              </Button>
+              <span>
+                Página {adminPage + 1} de {Math.ceil(data.totalOffers / 10)}
+              </span>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={(adminPage + 1) * 10 >= data.totalOffers}
+                onClick={() => {
+                  setAdminPage((page) => page + 1);
+                  setExpanded(null);
+                }}
+              >
+                Siguiente
+              </Button>
+            </nav>
+          )}
+        </div>
       )}
     </section>
   );

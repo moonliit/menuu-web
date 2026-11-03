@@ -1,0 +1,161 @@
+.admin-dashboard {
+  min-height: 65vh;
+}
+.admin-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.admin-heading p {
+  margin: 5px 0 0;
+  color: var(--color-muted);
+  font-size: 14px;
+}
+.admin-controls {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.admin-controls .km-week-controls {
+  flex: 1 1 370px;
+}
+.admin-kitchen-filter {
+  display: grid;
+  gap: 5px;
+  min-width: 190px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.admin-kitchen-filter select,
+.admin-capacity input {
+  min-height: 44px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-field);
+  background: white;
+  color: var(--color-text);
+  font: 500 16px var(--font-body);
+  padding: 0 12px;
+}
+.admin-kitchen-filter select:focus-visible,
+.admin-capacity input:focus-visible {
+  outline: 3px solid var(--color-orange-soft);
+  outline-offset: 2px;
+}
+.admin-summary {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 14px;
+}
+.admin-offer-group {
+  display: grid;
+  gap: 10px;
+}
+.admin-offer-row {
+  display: grid;
+  grid-template-columns:
+    76px minmax(150px, 1fr) minmax(135px, 175px) minmax(150px, 190px)
+    auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+.admin-offer-row > img {
+  width: 76px;
+  height: 76px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+.admin-offer-copy {
+  min-width: 0;
+}
+.admin-kitchen-name {
+  color: var(--color-orange-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.admin-offer-copy h2 {
+  margin: 2px 0 3px;
+  color: var(--color-brand);
+  font: 500 21px/1.2 var(--font-display);
+}
+.admin-offer-copy p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.admin-offer-count {
+  display: grid;
+  gap: 2px;
+  color: var(--color-brand);
+  font-size: 14px;
+}
+.admin-offer-count span {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.admin-capacity {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.admin-capacity > div {
+  display: flex;
+  gap: 6px;
+}
+.admin-capacity input {
+  width: 78px;
+}
+.admin-capacity .button {
+  min-height: 44px;
+  padding-inline: 10px;
+}
+@media (max-width: 1050px) {
+  .admin-offer-row {
+    grid-template-columns: 76px minmax(0, 1fr) minmax(135px, 180px);
+  }
+  .admin-capacity {
+    grid-column: 2;
+  }
+  .admin-offer-row > .button {
+    grid-column: 3;
+    grid-row: 2;
+  }
+}
+@media (max-width: 700px) {
+  .admin-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .admin-controls .km-week-controls {
+    flex-basis: 100%;
+  }
+  .admin-kitchen-filter {
+    flex: 1 1 190px;
+  }
+  .admin-offer-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 10px 12px;
+  }
+  .admin-offer-row > img {
+    width: 64px;
+    height: 64px;
+  }
+  .admin-offer-count {
+    grid-column: 2;
+  }
+  .admin-capacity {
+    grid-column: 1 / -1;
+  }
+  .admin-offer-row > .button {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-self: start;
+  }
+}

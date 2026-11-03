@@ -2,6 +2,7 @@
 import { deliveryMoment, weekStart } from "./catalog.mjs";
 import { normalizeComment, selectCustomization } from "./customization.mjs";
 import { getDb, transaction } from "./db.mjs";
+import { releaseOrderCapacity } from "./reservation-lifecycle.mjs";
 
 const soles = (cents) => cents / 100;
 const cents = (solesValue) => Math.round(solesValue * 100);
@@ -10,15 +11,23 @@ const invalid = (message, status = 400) =>
 const tokenHash = (token) => createHash("sha256").update(token).digest("hex");
 const dishKey = (kitchenId, dishId) => `${kitchenId}:${dishId}`;
 
-async function loadDishes(client) {
+async function loadDishes(client, selection = null) {
+  const filter = (alias) =>
+    selection
+      ? ` WHERE EXISTS (SELECT 1 FROM offers o WHERE o.kitchen_id=${alias}.kitchen_id AND o.dish_id=${alias}.${alias === "d" ? "id" : "dish_id"} AND ${selection.offerIds ? "o.id=ANY($1::text[])" : "o.offer_date >= $1 AND o.offer_date < date($1, '+14 days')"})`
+      : "";
+  const args = selection ? [selection.offerIds ?? selection.start] : [];
   const dishesResult = await client.query(
-    'SELECT kitchen_id AS "kitchenId", id, name, description, price_cents AS "priceCents", image_url AS "imageUrl", image_alt AS "imageAlt", active FROM dishes',
+    `SELECT d.kitchen_id AS "kitchenId", d.id, d.name, d.description, d.price_cents AS "priceCents", d.image_url AS "imageUrl", d.image_alt AS "imageAlt", d.active FROM dishes d${filter("d")}`,
+    args,
   );
   const groupsResult = await client.query(
-    'SELECT kitchen_id AS "kitchenId", dish_id AS "dishId", id, title, selection_type AS "selectionType", required, max_selections AS "maxSelections" FROM option_groups ORDER BY sort_order, id',
+    `SELECT g.kitchen_id AS "kitchenId", g.dish_id AS "dishId", g.id, g.title, g.selection_type AS "selectionType", g.required, g.max_selections AS "maxSelections" FROM option_groups g${filter("g")} ORDER BY g.sort_order,g.id`,
+    args,
   );
   const choicesResult = await client.query(
-    'SELECT kitchen_id AS "kitchenId", dish_id AS "dishId", group_id AS "groupId", id, label, price_cents AS "priceCents" FROM option_choices ORDER BY sort_order, id',
+    `SELECT c.kitchen_id AS "kitchenId", c.dish_id AS "dishId", c.group_id AS "groupId", c.id, c.label, c.price_cents AS "priceCents" FROM option_choices c${filter("c")} ORDER BY c.sort_order,c.id`,
+    args,
   );
   const dishes = new Map(
     dishesResult.rows.map((row) => [
@@ -114,7 +123,7 @@ export async function getCatalog(now = new Date()) {
       FROM offers WHERE offer_date >= $1 AND offer_date < date($1, '+14 days') ORDER BY offer_date, sort_order, id`,
       [start, now.toISOString()],
     ),
-    loadDishes(getDb()),
+    loadDishes(getDb(), { start }),
     getDb()
       .query(`SELECT f.kitchen_id AS "kitchenId", f.dish_id AS "dishId", sum(i.quantity) AS units
       FROM order_items i JOIN orders o ON o.id=i.order_id JOIN offers f ON f.id=i.offer_id
@@ -271,15 +280,47 @@ export async function removeSession(token) {
     ]);
 }
 
-export async function getOrders(userId) {
+export async function cancelOrder(userId, orderId) {
+  return transaction(async (db) => {
+    const order = (
+      await db.query(
+        `SELECT id,kitchen_id AS "kitchenId",offer_date AS date,delivery_time AS "deliveryTime",status,
+       fulfillment_status AS "fulfillmentStatus" FROM orders WHERE id=$1 AND user_id=$2`,
+        [orderId, userId],
+      )
+    ).rows[0];
+
+    if (!order) throw invalid("Reserva no encontrada.", 404);
+
+    if (order.status !== "reservado" || order.fulfillmentStatus !== "pending")
+      throw invalid("Esta reserva ya no se puede cancelar.", 409);
+
+    if (deliveryMoment(order.date, order.deliveryTime).getTime() <= Date.now())
+      throw invalid("La hora de recojo ya comenzó. Contacta a la cocina.", 409);
+    const changed = await db.query(
+      `UPDATE orders SET status='cancelado',review_enabled=0,cancelled_at=$3
+       WHERE id=$1 AND user_id=$2 AND status='reservado' AND fulfillment_status='pending' RETURNING id`,
+      [orderId, userId, new Date().toISOString()],
+    );
+
+    if (!changed.rowCount)
+      throw invalid("Esta reserva ya no se puede cancelar.", 409);
+    await releaseOrderCapacity(db, orderId, order.kitchenId);
+
+    return { ok: true };
+  });
+}
+
+export async function getOrders(userId, page = null) {
+  const paged = page !== null;
   const ordersResult = await getDb().query(
     `SELECT o.id,o.code,o.kitchen_id AS "kitchenId",o.kitchen_name AS "kitchenName",
     o.offer_date AS date,o.delivery_time AS "deliveryTime",
-    o.pickup_until AS "pickupUntil",o.pickup_point AS "pickupPoint",o.status,o.payment,
+    o.pickup_until AS "pickupUntil",o.pickup_point AS "pickupPoint",o.status,COALESCE(o.payment_recorded,o.payment) AS payment,
     o.fulfillment_status AS "fulfillmentStatus",o.review_enabled AS "reviewEnabled",r.kitchen_rating AS "kitchenRating",
     o.total_cents AS "totalCents",o.created_at AS "createdAt" FROM orders o
-    LEFT JOIN order_reviews r ON r.order_id=o.id WHERE o.user_id=$1 ORDER BY o.created_at DESC`,
-    [userId],
+    LEFT JOIN order_reviews r ON r.order_id=o.id WHERE o.user_id=$1 ORDER BY o.created_at DESC,o.id DESC${paged ? " LIMIT $2 OFFSET $3" : ""}`,
+    paged ? [userId, page.limit, page.offset] : [userId],
   );
 
   if (!ordersResult.rows.length) return [];
@@ -347,6 +388,17 @@ export async function getOrders(userId) {
     createdAt: row.createdAt,
     items: items.get(row.id) || [],
   }));
+}
+
+export async function getOrdersPage(userId, { limit = 10, offset = 0 } = {}) {
+  const [orders, count] = await Promise.all([
+    getOrders(userId, { limit, offset }),
+    getDb().query("SELECT count(*) AS total FROM orders WHERE user_id=$1", [
+      userId,
+    ]),
+  ]);
+
+  return { orders, total: Number(count.rows[0].total), limit, offset };
 }
 
 export async function submitReview(userId, orderId, payload, now = new Date()) {
@@ -509,7 +561,7 @@ export async function createBooking(userId, payload, requestKey = null) {
         .filter((row) => row.customizationOverride)
         .map((row) => row.id),
     );
-    const dishes = await loadDishes(client);
+    const dishes = await loadDishes(client, { offerIds: ids });
     const kitchensResult = await client.query("SELECT id,name FROM kitchens");
     const kitchenNames = new Map(
       kitchensResult.rows.map((row) => [row.id, row.name]),
@@ -559,6 +611,7 @@ export async function createBooking(userId, payload, requestKey = null) {
         totalCents: unitPriceCents * quantity,
         kitchenId: offer.kitchenId,
         kitchenName: kitchenNames.get(offer.kitchenId) || "",
+        bookingDeadline: offer.bookingDeadline,
         date: offer.date,
         deliveryTime: offer.deliveryTime,
         pickupUntil: offer.pickupUntil,
@@ -598,7 +651,7 @@ export async function createBooking(userId, payload, requestKey = null) {
         date: group[0].date,
         deliveryTime: group[0].deliveryTime,
         pickupUntil: group[0].pickupUntil,
-        pickupPoint: "Comedor UTEC",
+        pickupPoint: "Entrada del Comedor UTEC en piso 2",
         status: "reservado",
         payment: "QR al recibir",
         totalCents: group.reduce((sum, item) => sum + item.totalCents, 0),
@@ -628,8 +681,8 @@ export async function createBooking(userId, payload, requestKey = null) {
 
       for (const [index, item] of group.entries()) {
         const saved = await client.query(
-          `INSERT INTO order_items (order_id,offer_id,dish_name,image_url,quantity,comment,unit_price_cents,total_cents,sort_order)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+          `INSERT INTO order_items (order_id,offer_id,dish_name,image_url,quantity,comment,unit_price_cents,total_cents,sort_order,booking_deadline_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
           [
             order.id,
             item.offeringId,
@@ -640,6 +693,7 @@ export async function createBooking(userId, payload, requestKey = null) {
             item.unitPriceCents,
             item.totalCents,
             index,
+            item.bookingDeadline,
           ],
         );
 

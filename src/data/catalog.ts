@@ -58,7 +58,7 @@ export type User = {
   id: string;
   name: string;
   email: string;
-  role: "consumer" | "kitchen";
+  role: "consumer" | "kitchen" | "admin";
   kitchenId?: string;
   studentCode: string | null;
   career: string | null;
@@ -162,6 +162,19 @@ export function weekDate(start: string, dayIndex: number): string {
   const date = new Date(`${start}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() + dayIndex);
   return date.toISOString().slice(0, 10);
+}
+
+export function nextBookableDate(
+  offerings: Pick<Offering, "date" | "bookable">[],
+  today: string,
+): string | null {
+  return offerings.reduce<string | null>(
+    (next, offer) =>
+      offer.bookable && offer.date >= today && (!next || offer.date < next)
+        ? offer.date
+        : next,
+    null,
+  );
 }
 
 export function timeLabel(time: string): string {

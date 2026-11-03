@@ -4,13 +4,21 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deliveryMoment } from "./catalog.mjs";
+import {
+  adminData,
+  adminOfferKitchen,
+  adminOrderKitchen,
+  updateAdminCapacity,
+} from "./admin.mjs";
 import { careers } from "./careers.mjs";
 import { closeDb, getDb } from "./db.mjs";
 import {
+  cancelOrder,
   createBooking,
   findUserByEmail,
   getCatalog,
   getOrders,
+  getOrdersPage,
   insertSession,
   insertUser,
   removeSession,
@@ -20,14 +28,24 @@ import {
 } from "./repository.mjs";
 import { hashPassword, publicUser, verifyPassword } from "./store.mjs";
 import {
+  addKitchenReservation,
   kitchenData,
   kitchenImage,
+  kitchenStudentCandidates,
   saveDish,
   saveKitchenImage,
   saveOffer,
   updateKitchen,
+  updateKitchenReservation,
 } from "./kitchen.mjs";
 import { migrate } from "../scripts/migrate.mjs";
+import {
+  dispatchPickupReminders,
+  pushConfig,
+  removePushSubscription,
+  savePushSubscription,
+  validDispatchSecret,
+} from "./push.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const isDev = process.argv.includes("--dev");
@@ -55,10 +73,10 @@ const mime = {
   ".ico": "image/x-icon",
 };
 
-function json(res, status, value) {
+function json(res, status, value, cacheControl = "no-store") {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store",
+    "Cache-Control": cacheControl,
   });
   res.end(JSON.stringify(value));
 }
@@ -169,6 +187,23 @@ function validBirthDate(value) {
   );
 }
 
+function listPage(url, defaultLimit = 20) {
+  const limit = Number(url.searchParams.get("limit") ?? defaultLimit);
+  const offset = Number(url.searchParams.get("offset") ?? 0);
+
+  if (
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > 20 ||
+    !Number.isInteger(offset) ||
+    offset < 0 ||
+    offset > 100000
+  )
+    throw Object.assign(new Error("Paginación inválida."), { status: 400 });
+
+  return { limit, offset };
+}
+
 function visibleOrder(order, now = new Date()) {
   if (order.status !== "reservado") return order;
 
@@ -184,6 +219,36 @@ function visibleOrder(order, now = new Date()) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/push/dispatch") {
+    if (!validDispatchSecret(req.headers.authorization))
+      return error(res, 401, "Acceso no permitido.");
+
+    return json(res, 200, await dispatchPickupReminders());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/push/config")
+    return json(res, 200, pushConfig());
+
+  if (
+    url.pathname === "/api/push/subscription" ||
+    url.pathname === "/api/push/unsubscribe"
+  ) {
+    if (req.method !== "POST" || !sameOrigin(req))
+      return error(res, 403, "Solicitud no permitida.");
+    const user = await userFromSession(sessionToken(req));
+
+    if (!user || user.role !== "consumer")
+      return error(res, 401, "Inicia sesión como estudiante.");
+    const data = await body(req);
+
+    return json(
+      res,
+      200,
+      url.pathname === "/api/push/subscription"
+        ? await savePushSubscription(user.id, data)
+        : await removePushSubscription(user.id, data?.endpoint),
+    );
+  }
   const imageMatch = /^\/api\/kitchen\/image\/([a-f0-9-]{36})$/.exec(
     url.pathname,
   );
@@ -201,14 +266,108 @@ async function handleApi(req, res, url) {
     return res.end(image.content);
   }
 
+  if (url.pathname.startsWith("/api/admin/")) {
+    const user = await userFromSession(sessionToken(req));
+
+    if (!user) return error(res, 401, "Inicia sesión como admin.");
+
+    if (user.role !== "admin")
+      return error(res, 403, "Acceso de admin requerido.");
+
+    if (req.method === "GET" && url.pathname === "/api/admin/data") {
+      const weekValue = url.searchParams.get("week");
+      const week = weekValue === null ? null : Number(weekValue);
+      const kitchen = url.searchParams.get("kitchen") || "all";
+
+      if (
+        (week !== null && ![0, 1].includes(week)) ||
+        (kitchen !== "all" && !/^[a-zA-Z0-9-]{1,100}$/.test(kitchen))
+      )
+        return error(res, 400, "Filtros inválidos.");
+
+      return json(
+        res,
+        200,
+        await adminData({ week, kitchen, ...listPage(url) }),
+      );
+    }
+    const candidatesMatch =
+      /^\/api\/admin\/offers\/([a-zA-Z0-9-]+)\/students$/.exec(url.pathname);
+
+    if (req.method === "GET" && candidatesMatch) {
+      const kitchenId = await adminOfferKitchen(candidatesMatch[1]);
+
+      return json(
+        res,
+        200,
+        await kitchenStudentCandidates(
+          kitchenId,
+          candidatesMatch[1],
+          url.searchParams.get("q") || "",
+          listPage(url),
+        ),
+      );
+    }
+
+    if (req.method !== "POST" || !sameOrigin(req))
+      return error(res, 403, "Solicitud no permitida.");
+    const data = await body(req);
+
+    if (url.pathname === "/api/admin/offers/capacity")
+      return json(res, 200, await updateAdminCapacity(user.id, data));
+
+    if (url.pathname === "/api/admin/reservations/add") {
+      const kitchenId = await adminOfferKitchen(data?.offerId);
+
+      return json(
+        res,
+        201,
+        await addKitchenReservation(kitchenId, user.id, data),
+      );
+    }
+
+    if (url.pathname === "/api/admin/reservations/update") {
+      const kitchenId = await adminOrderKitchen(data?.orderId);
+
+      return json(
+        res,
+        200,
+        await updateKitchenReservation(kitchenId, user.id, data, true),
+      );
+    }
+
+    return error(res, 404, "Ruta no encontrada.");
+  }
+
   if (url.pathname.startsWith("/api/kitchen/")) {
     const user = await userFromSession(sessionToken(req));
 
     if (!user || user.role !== "kitchen" || !user.kitchenId)
       return error(res, 401, "Inicia sesión como cocina.");
 
-    if (req.method === "GET" && url.pathname === "/api/kitchen/data")
-      return json(res, 200, await kitchenData(user.kitchenId));
+    if (req.method === "GET" && url.pathname === "/api/kitchen/data") {
+      return json(
+        res,
+        200,
+        await kitchenData(user.kitchenId, {
+          includeAnalytics: url.searchParams.get("scope") !== "operations",
+        }),
+      );
+    }
+    const candidatesMatch =
+      /^\/api\/kitchen\/offers\/([a-zA-Z0-9-]+)\/students$/.exec(url.pathname);
+
+    if (req.method === "GET" && candidatesMatch)
+      return json(
+        res,
+        200,
+        await kitchenStudentCandidates(
+          user.kitchenId,
+          candidatesMatch[1],
+          url.searchParams.get("q") || "",
+          listPage(url),
+        ),
+      );
 
     if (req.method !== "POST" || !sameOrigin(req))
       return error(res, 403, "Solicitud no permitida.");
@@ -262,7 +421,50 @@ async function handleApi(req, res, url) {
     if (url.pathname === "/api/kitchen/offers")
       return json(res, 200, { id: await saveOffer(user.kitchenId, data) });
 
+    if (url.pathname === "/api/kitchen/reservations/add")
+      return json(
+        res,
+        201,
+        await addKitchenReservation(user.kitchenId, user.id, data),
+      );
+
+    if (url.pathname === "/api/kitchen/reservations/update")
+      return json(
+        res,
+        200,
+        await updateKitchenReservation(user.kitchenId, user.id, data),
+      );
+
     return error(res, 404, "Ruta no encontrada.");
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/session") {
+    const user = await userFromSession(sessionToken(req));
+
+    return json(res, 200, { user: publicUser(user), careers });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/catalog")
+    return json(
+      res,
+      200,
+      await getCatalog(),
+      url.searchParams.has("fresh")
+        ? "no-store"
+        : "public, max-age=15, s-maxage=30, stale-while-revalidate=30",
+    );
+
+  if (req.method === "GET" && url.pathname === "/api/orders") {
+    const user = await userFromSession(sessionToken(req));
+
+    if (!user || user.role !== "consumer")
+      return error(res, 401, "Inicia sesión como estudiante.");
+    const page = await getOrdersPage(user.id, listPage(url, 10));
+
+    return json(res, 200, {
+      ...page,
+      orders: page.orders.map((order) => visibleOrder(order)),
+    });
   }
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
@@ -291,7 +493,9 @@ async function handleApi(req, res, url) {
       typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
     const password = typeof data.password === "string" ? data.password : "";
     const studentCode =
-      typeof data.studentCode === "string" ? data.studentCode.trim() : "";
+      typeof data.studentCode === "string"
+        ? data.studentCode.trim().toUpperCase()
+        : "";
     const career = typeof data.career === "string" ? data.career.trim() : "";
     const birthDate =
       data.birthDate == null || data.birthDate === "" ? null : data.birthDate;
@@ -302,8 +506,16 @@ async function handleApi(req, res, url) {
     if (!validateEmail(email))
       return error(res, 400, "Usa tu correo institucional @utec.edu.pe.");
 
-    if (!/^[0-9]{9}$/.test(studentCode))
-      return error(res, 400, "El código de estudiante debe tener 9 dígitos.");
+    if (
+      !/^(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})$/.test(
+        studentCode,
+      )
+    )
+      return error(
+        res,
+        400,
+        "Usa 9 dígitos o un código PRE, por ejemplo 20261PREEN01008.",
+      );
 
     if (!careers.includes(career))
       return error(res, 400, "Selecciona una carrera de la lista.");
@@ -360,7 +572,9 @@ async function handleApi(req, res, url) {
     const email =
       typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
     const password = typeof data.password === "string" ? data.password : "";
-    const role = data.role === "kitchen" ? "kitchen" : "consumer";
+    const role = ["consumer", "kitchen", "admin"].includes(data.role)
+      ? data.role
+      : "consumer";
     const user = await findUserByEmail(email);
 
     if (!user || !verifyPassword(password, user.passwordHash))
@@ -372,7 +586,9 @@ async function handleApi(req, res, url) {
         403,
         role === "kitchen"
           ? "Esta cuenta no tiene acceso de cocina."
-          : "Esta cuenta pertenece a una cocina. Usa el acceso de cocinas.",
+          : role === "admin"
+            ? "Esta cuenta no tiene acceso de admin."
+            : "Esta cuenta usa otro acceso de Menúu.",
       );
     const token = randomBytes(32).toString("hex");
 
@@ -442,7 +658,9 @@ async function handleApi(req, res, url) {
 
     // El alumno no está registrado aún
     const studentCode =
-      typeof data.studentCode === "string" ? data.studentCode.trim() : "";
+      typeof data.studentCode === "string"
+        ? data.studentCode.trim().toUpperCase()
+        : "";
     const career = typeof data.career === "string" ? data.career.trim() : "";
 
     // Si aún no envía los datos de registro, indicamos que requiere completar registro
@@ -468,11 +686,16 @@ async function handleApi(req, res, url) {
     const birthDate =
       data.birthDate == null || data.birthDate === "" ? null : data.birthDate;
 
-    if (regName.length < 2 || regName.length > 80)
-      return error(res, 400, "Escribe tu nombre completo (2 a 80 caracteres).");
-
-    if (!/^[0-9]{9}$/.test(studentCode))
-      return error(res, 400, "El código de estudiante debe tener 9 dígitos.");
+    if (
+      !/^(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})$/.test(
+        studentCode,
+      )
+    )
+      return error(
+        res,
+        400,
+        "Usa 9 dígitos o un código PRE, por ejemplo 20261PREEN01008.",
+      );
 
     if (!careers.includes(career))
       return error(res, 400, "Selecciona una carrera de la lista.");
@@ -539,7 +762,9 @@ async function handleApi(req, res, url) {
       return error(res, 400, "Datos de perfil inválidos.");
     const name = typeof data.name === "string" ? data.name.trim() : "";
     const studentCode =
-      typeof data.studentCode === "string" ? data.studentCode.trim() : "";
+      typeof data.studentCode === "string"
+        ? data.studentCode.trim().toUpperCase()
+        : "";
     const career = typeof data.career === "string" ? data.career.trim() : "";
     const birthDate =
       data.birthDate == null || data.birthDate === "" ? null : data.birthDate;
@@ -547,8 +772,16 @@ async function handleApi(req, res, url) {
     if (name.length < 2 || name.length > 80)
       return error(res, 400, "Escribe tu nombre (2 a 80 caracteres).");
 
-    if (!/^[0-9]{9}$/.test(studentCode))
-      return error(res, 400, "El código de estudiante debe tener 9 dígitos.");
+    if (
+      !/^(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})$/.test(
+        studentCode,
+      )
+    )
+      return error(
+        res,
+        400,
+        "Usa 9 dígitos o un código PRE, por ejemplo 20261PREEN01008.",
+      );
 
     if (!careers.includes(career))
       return error(res, 400, "Selecciona una carrera de la lista.");
@@ -594,6 +827,18 @@ async function handleApi(req, res, url) {
     );
 
     return json(res, 201, { orders: created });
+  }
+  const cancelMatch = /^\/api\/orders\/([a-zA-Z0-9-]+)\/cancel$/.exec(
+    url.pathname,
+  );
+
+  if (cancelMatch) {
+    const user = await userFromSession(sessionToken(req));
+
+    if (!user || user.role !== "consumer")
+      return error(res, 401, "Inicia sesión con tu cuenta de estudiante.");
+
+    return json(res, 200, await cancelOrder(user.id, cancelMatch[1]));
   }
   const reviewMatch = /^\/api\/orders\/([a-zA-Z0-9-]+)\/review$/.exec(
     url.pathname,

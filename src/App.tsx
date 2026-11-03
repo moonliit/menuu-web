@@ -8,7 +8,6 @@ import {
 } from "react";
 import {
   ArrowRight,
-  CalendarDays,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -27,6 +26,10 @@ import {
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { Button, EmptyState, SearchField } from "./components/ui";
+import {
+  disablePickupNotifications,
+  PickupNotifications,
+} from "./components/PickupNotifications";
 import {
   BrandAccountIcon,
   BrandCalendarIcon,
@@ -51,6 +54,7 @@ import {
   dateLabel,
   limaDayIndex,
   money,
+  nextBookableDate,
   pickupWindow,
   weekDate,
   type Bootstrap,
@@ -61,8 +65,21 @@ import {
   type SelectedChoices,
   type User,
 } from "./data/catalog";
-import KitchenDashboard, { type KitchenSection } from "./KitchenDashboard";
+import KitchenDashboard, {
+  AdminDashboard,
+  type KitchenSection,
+} from "./KitchenDashboard";
 import { CustomizationDialog } from "./components/CustomizationDialog";
+import { InstallPrompt } from "./components/InstallPrompt";
+import { cachedRequest, cachedValue, invalidateCache } from "./data/queryCache";
+
+type SessionData = Pick<Bootstrap, "user" | "careers">;
+type OrdersPage = {
+  orders: Order[];
+  total: number;
+  limit: number;
+  offset: number;
+};
 
 type Page =
   | "inicio"
@@ -75,8 +92,14 @@ type Page =
   | "cocinaMenu"
   | "cocinaPlatos"
   | "cocinaEstadisticas"
-  | "cocinaCuenta";
+  | "cocinaCuenta"
+  | "admin"
+  | "adminPedidos";
 type PickupOption = { key: string; start: string; end: string };
+const validStudentCode = (code: string) =>
+  /^(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})$/.test(code);
+const studentCodeHelp =
+  "Usa 9 dígitos o un código PRE, por ejemplo 20261PREEN01008.";
 const routes: Record<Page, string> = {
   inicio: "#inicio",
   buscar: "#menu",
@@ -89,6 +112,8 @@ const routes: Record<Page, string> = {
   cocinaPlatos: "#cocina/platos",
   cocinaEstadisticas: "#cocina/estadisticas",
   cocinaCuenta: "#cocina/cuenta",
+  admin: "#admin",
+  adminPedidos: "#admin/pedidos",
 };
 const kitchenPages: Page[] = [
   "cocinaInicio",
@@ -108,7 +133,11 @@ function pageFromHash(hash: string): Page {
   if (/^#menu\/cocina\/[a-z0-9-]+$/.test(hash)) return "buscar";
   return (
     (Object.keys(routes) as Page[]).find((page) => routes[page] === hash) ??
-    (hash.startsWith("#cocina/") ? "cocina" : "inicio")
+    (hash.startsWith("#cocina/")
+      ? "cocina"
+      : hash.startsWith("#admin/")
+        ? "admin"
+        : "inicio")
   );
 }
 function kitchenFromHash(hash: string): string | null {
@@ -126,7 +155,7 @@ function DataNoticeDialog({
   kind,
   onClose,
 }: {
-  kind: "consumer" | "kitchen";
+  kind: "consumer" | "kitchen" | "admin";
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -157,7 +186,16 @@ function DataNoticeDialog({
         Menúu es un producto piloto con fines educativos para el curso
         Emprendimiento 1. Sus funciones pueden cambiar durante esta etapa.
       </p>
-      {kind === "kitchen" ? (
+      {kind === "admin" ? (
+        <>
+          <h3>Si administras las entregas</h3>
+          <p>
+            Tu cuenta permite ver los pedidos de todas las cocinas y registrar
+            cupos, altas manuales, entregas, ausencias y pagos. Guardamos quién
+            realizó cada cambio y cuándo.
+          </p>
+        </>
+      ) : kind === "kitchen" ? (
         <>
           <h3>Si gestionas una cocina</h3>
           <p>
@@ -237,13 +275,17 @@ const limaToday = () => {
     parts.find((part) => part.type === type)?.value || "";
   return `${value("year")}-${value("month")}-${value("day")}`;
 };
-const limaTime = () =>
-  new Intl.DateTimeFormat("en-GB", {
-    timeZone: "America/Lima",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(new Date());
+const emptyCatalog = (): Bootstrap["catalog"] => {
+  const today = limaToday();
+  const start = weekDate(today, -(limaDayIndex() ?? 6));
+  return {
+    kitchens: [],
+    offerings: [],
+    sales: [],
+    weeklyDishSales: [],
+    weeks: [start, weekDate(start, 7)],
+  };
+};
 const offerPrice = (offer: Offering, choices: SelectedChoices) =>
   offer.priceSoles +
   offer.customization.reduce(
@@ -420,11 +462,7 @@ function OfferingCard({
   onChoose: (offer: Offering) => void;
   onKitchen: (id: string) => void;
 }) {
-  const today = limaToday();
-  const soldOutBeforePickup =
-    offer.remaining <= 0 &&
-    (offer.date > today ||
-      (offer.date === today && offer.pickupUntil > limaTime()));
+  const soldOut = offer.remaining <= 0;
   return (
     <article className="offer-card">
       <div className="offer-photo">
@@ -469,8 +507,18 @@ function OfferingCard({
           <div>
             <BrandClockIcon size={17} />
             <span>
-              <strong>Reserva hasta</strong>
-              <small>
+              <strong>
+                {!offer.bookable && offer.remaining < 1
+                  ? "Reserva cerrada"
+                  : "Reserva hasta"}
+              </strong>
+              <small
+                className={
+                  !offer.bookable && offer.remaining < 1
+                    ? "offer-deadline-ended"
+                    : undefined
+                }
+              >
                 {capitalizeFirst(bookingDeadlineLabel(offer.bookingDeadline))}
               </small>
             </span>
@@ -487,14 +535,14 @@ function OfferingCard({
             {offer.bookable && <ArrowRight size={17} />}
           </Button>
         </div>
-        <span
-          className={`offer-stock${soldOutBeforePickup ? " offer-stock-soldout" : ""}`}
-        >
-          {soldOutBeforePickup
+        <span className={`offer-stock${soldOut ? " offer-stock-soldout" : ""}`}>
+          {soldOut
             ? "¡Sold out!"
             : offer.bookable
               ? `${offer.remaining} ${offer.remaining === 1 ? "porción disponible" : "porciones disponibles"}`
-              : ""}
+              : offer.remaining > 0
+                ? "¡Ve al punto de encuentro! ¡Venta presencial!"
+                : ""}
         </span>
       </div>
     </article>
@@ -515,17 +563,43 @@ function CareerPicker({
   triggerRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const mobileSelectRef = useRef<HTMLSelectElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) optionRefs.current[Math.max(0, careers.indexOf(value))]?.focus();
-  }, [open, careers, value]);
+    if (open && !wasOpen.current)
+      optionRefs.current[Math.max(0, careers.indexOf(value))]?.focus();
+    wasOpen.current = open;
+  });
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideTap = (event: PointerEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideTap);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideTap);
+  }, [open]);
+  useEffect(() => {
+    if (invalid && window.matchMedia("(max-width: 700px)").matches)
+      mobileSelectRef.current?.focus();
+  }, [invalid]);
   const focusOption = (index: number) =>
     optionRefs.current[(index + careers.length) % careers.length]?.focus();
+  const selectCareer = (career: string) => {
+    onChange(career);
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
   return (
     <div
+      ref={pickerRef}
       className="career-picker"
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+        if (
+          event.relatedTarget &&
+          !event.currentTarget.contains(event.relatedTarget as Node)
+        )
           setOpen(false);
       }}
     >
@@ -556,8 +630,42 @@ function CareerPicker({
         <span id="career-value" className={value ? "" : "placeholder"}>
           {value || "Selecciona tu carrera"}
         </span>
+        {value && (
+          <Check
+            className="career-picker-selected"
+            size={18}
+            aria-hidden="true"
+          />
+        )}
         <ChevronDown size={19} aria-hidden="true" />
       </button>
+      <div className="career-picker-native">
+        <select
+          ref={mobileSelectRef}
+          value={value}
+          className={!value ? "career-picker-native-placeholder" : undefined}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setOpen(false);
+          }}
+          aria-labelledby="career-label"
+          aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? "auth-error-toast" : undefined}
+        >
+          <option value="" disabled>
+            Selecciona tu carrera
+          </option>
+          {careers.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+        <span className="career-picker-native-icons" aria-hidden="true">
+          {value && <Check size={18} />}
+          <ChevronDown size={19} />
+        </span>
+      </div>
       {open && (
         <div
           className="career-picker-options"
@@ -574,11 +682,8 @@ function CareerPicker({
               type="button"
               role="option"
               aria-selected={value === item}
-              onClick={() => {
-                onChange(item);
-                setOpen(false);
-                triggerRef.current?.focus();
-              }}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => selectCareer(item)}
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
@@ -859,20 +964,26 @@ function AuthPanel({
                 <label>
                   Código de estudiante
                   <input
+                    name="studentCode"
                     type="text"
-                    inputMode="numeric"
+                    inputMode="text"
+                    autoCapitalize="characters"
                     autoComplete="off"
                     minLength={9}
-                    maxLength={9}
-                    pattern="[0-9]{9}"
-                    title="Usa los 9 dígitos de tu código"
+                    maxLength={15}
+                    pattern="(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})"
+                    title={studentCodeHelp}
                     required
                     value={studentCode}
                     onChange={(event) => {
-                      setStudentCode(event.target.value.replace(/\D/g, ""));
+                      setStudentCode(
+                        event.target.value
+                          .toUpperCase()
+                          .replace(/[^0-9A-Z]/g, ""),
+                      );
                       setError("");
                     }}
-                    placeholder="9 dígitos"
+                    placeholder="9 dígitos o PRE"
                     spellCheck={false}
                   />
                 </label>
@@ -1047,9 +1158,12 @@ function AuthPanel({
 
 function KitchenAccess({
   onAuthenticated,
+  role = "kitchen",
 }: {
   onAuthenticated: () => Promise<void>;
+  role?: "kitchen" | "admin";
 }) {
+  const admin = role === "admin";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1061,7 +1175,9 @@ function KitchenAccess({
     setError(
       field.type === "email"
         ? field.validity.valueMissing
-          ? "Ingresa el correo de tu cocina."
+          ? admin
+            ? "Ingresa el correo de admin."
+            : "Ingresa el correo de tu cocina."
           : "Revisa el formato del correo."
         : "Ingresa tu contraseña.",
     );
@@ -1071,7 +1187,7 @@ function KitchenAccess({
     setBusy(true);
     setError("");
     try {
-      await api("/api/auth/login", { email, password, role: "kitchen" });
+      await api("/api/auth/login", { email, password, role });
       await onAuthenticated();
     } catch (cause) {
       setError(
@@ -1084,8 +1200,10 @@ function KitchenAccess({
   return (
     <section className="page-section narrow auth-page kitchen-access">
       <div className="page-heading">
-        <span className="eyebrow">ACCESO DE COCINAS</span>
-        <h1>Entra a tu cocina</h1>
+        <span className="eyebrow">
+          {admin ? "ACCESO ADMIN" : "ACCESO DE COCINAS"}
+        </span>
+        <h1>{admin ? "Administra las entregas" : "Entra a tu cocina"}</h1>
       </div>
       <div className="kitchen-access-layout">
         <div className="kitchen-access-card">
@@ -1094,7 +1212,7 @@ function KitchenAccess({
           </div>
           <form onSubmit={submit} onInvalidCapture={invalid}>
             <label>
-              Correo de la cocina
+              {admin ? "Correo de admin" : "Correo de la cocina"}
               <input
                 type="email"
                 autoComplete="email"
@@ -1104,7 +1222,7 @@ function KitchenAccess({
                   setEmail(event.target.value);
                   setError("");
                 }}
-                placeholder="cocina@correo.com"
+                placeholder={admin ? "admin@correo.com" : "cocina@correo.com"}
               />
             </label>
             <label>
@@ -1122,7 +1240,11 @@ function KitchenAccess({
               />
             </label>
             <Button type="submit" disabled={busy}>
-              {busy ? "Un momento…" : "Entrar como cocina"}{" "}
+              {busy
+                ? "Un momento…"
+                : admin
+                  ? "Entrar como admin"
+                  : "Entrar como cocina"}{" "}
               <ArrowRight size={18} aria-hidden="true" />
             </Button>
           </form>
@@ -1141,6 +1263,11 @@ function KitchenAccess({
       <a className="kitchen-back-link" href={routes.cuenta}>
         Soy estudiante <ArrowRight size={16} aria-hidden="true" />
       </a>
+      {!admin && (
+        <a className="kitchen-back-link" href={routes.admin}>
+          Acceso admin <ArrowRight size={16} aria-hidden="true" />
+        </a>
+      )}
       {error && (
         <AuthErrorToast message={error} kitchen onClose={() => setError("")} />
       )}
@@ -1177,7 +1304,7 @@ function AccountProfile({
     career !== (user.career || "") ||
     birthDate !== (user.birthDate || "");
   const legacyStudentCode =
-    !!user.studentCode && !/^[0-9]{9}$/.test(user.studentCode);
+    !!user.studentCode && !validStudentCode(user.studentCode);
   const birthDateLabel = user.birthDate
     ? birthDateDisplay(user.birthDate)
     : "Sin registrar";
@@ -1269,25 +1396,27 @@ function AccountProfile({
           <label>
             Código de estudiante
             <input
+              name="studentCode"
               type="text"
-              inputMode="numeric"
+              inputMode="text"
+              autoCapitalize="characters"
               autoComplete="off"
               minLength={9}
-              maxLength={9}
-              pattern="[0-9]{9}"
-              title="Usa los 9 dígitos de tu código"
+              maxLength={15}
+              pattern="(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})"
+              title={studentCodeHelp}
               required
               value={studentCode}
               onChange={(event) => {
-                setStudentCode(event.target.value.replace(/\D/g, ""));
+                setStudentCode(
+                  event.target.value.toUpperCase().replace(/[^0-9A-Z]/g, ""),
+                );
                 setSuccess("");
               }}
               spellCheck={false}
             />
             {legacyStudentCode && (
-              <small className="account-field-help">
-                Actualiza tu código a 9 dígitos para guardar cambios.
-              </small>
+              <small className="account-field-help">{studentCodeHelp}</small>
             )}
           </label>
           <CareerPicker
@@ -1334,9 +1463,7 @@ function AccountProfile({
             <dt>Código de estudiante</dt>
             <dd>{user.studentCode || "Sin registrar"}</dd>
             {legacyStudentCode && (
-              <small className="account-field-help">
-                Actualiza tu código a 9 dígitos para guardar cambios.
-              </small>
+              <small className="account-field-help">{studentCodeHelp}</small>
             )}
           </div>
           <div className="account-detail account-detail-career">
@@ -1373,9 +1500,49 @@ type FeaturedSlide = {
   kitchen: Kitchen;
   offer: Offering;
   titleLines: [string, string];
-  subtitle: string | null;
   descriptionLines: [string, string];
 };
+
+function featuredCopy(
+  offer: Offering,
+  index: number,
+): Pick<FeaturedSlide, "titleLines" | "descriptionLines"> {
+  const dish = offer.name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("es");
+  if (dish.includes("arroz con pollo"))
+    return {
+      titleLines: ["Un clásico para", "tu break."],
+      descriptionLines: [
+        "Arroz con pollo para tu almuerzo.",
+        "Elige tu día y reserva tu porción.",
+      ],
+    };
+  if (dish.includes("pure") && dish.includes("milanesa"))
+    return {
+      titleLines: ["Una pausa rica,", "sin vueltas."],
+      descriptionLines: [
+        "Puré suave y milanesa dorada.",
+        "Haz una pausa rica entre clases.",
+      ],
+    };
+  return index === 0
+    ? {
+        titleLines: ["Tu break pide", "algo rico."],
+        descriptionLines: [
+          "Un antojo para cortar la rutina.",
+          "Mira el menú y elige tu día.",
+        ],
+      }
+    : {
+        titleLines: ["Almorzar rico", "sí se puede."],
+        descriptionLines: [
+          "Dale sabor a tu pausa en la U.",
+          "Conoce la cocina y reserva.",
+        ],
+      };
+}
 
 function FeaturedCarousel({
   slides,
@@ -1443,11 +1610,6 @@ function FeaturedCarousel({
               </span>
             ))}
           </h1>
-          <h3>
-            {slide.subtitle && (
-              <span className="featured-text-line">{slide.subtitle}</span>
-            )}
-          </h3>
           <p>
             {slide.descriptionLines.map((line, lineIndex) => (
               <span className="featured-text-line" key={lineIndex}>
@@ -1479,6 +1641,7 @@ function FeaturedCarousel({
                   }
                 />
               </div>
+              <span className="featured-dish-label">{item.offer.name}</span>
             </div>
           ))}
         </div>
@@ -1523,17 +1686,24 @@ export default function App() {
     kitchenFromHash(window.location.hash),
   );
   const [state, setState] = useState<Bootstrap | null>(null);
+  const [catalogReady, setCatalogReady] = useState(false);
+  const [ordersPage, setOrdersPage] = useState(0);
+  const [ordersTotal, setOrdersTotal] = useState(0);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
+  const ordersRequestRef = useRef(0);
   const [loadError, setLoadError] = useState("");
   const [week, setWeek] = useState(0);
   const [dayFilter, setDayFilter] = useState<number | null>(() =>
     limaDayIndex(),
   );
+  const [menuFilterManual, setMenuFilterManual] = useState(false);
   const [pickupFilter, setPickupFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Offering | null>(null);
-  const [dataNotice, setDataNotice] = useState<"consumer" | "kitchen" | null>(
-    null,
-  );
+  const [dataNotice, setDataNotice] = useState<
+    "consumer" | "kitchen" | "admin" | null
+  >(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const bookingKeyRef = useRef<string | null>(null);
   const [notice, setNotice] = useState("");
@@ -1541,19 +1711,133 @@ export default function App() {
   const [bookingError, setBookingError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
 
-  async function refresh() {
-    const data = await api<Bootstrap>("/api/bootstrap");
-    setState(data);
+  async function refresh(force = true) {
+    const session = await cachedRequest(
+      "session",
+      () => api<SessionData>("/api/session"),
+      300_000,
+      force,
+    );
+    const needsCatalog =
+      ![
+        "cuenta",
+        "pedidos",
+        "cocina",
+        "cocinaInicio",
+        "cocinaMenu",
+        "cocinaPlatos",
+        "cocinaEstadisticas",
+        "cocinaCuenta",
+        "admin",
+        "adminPedidos",
+      ].includes(page) &&
+      session.user?.role !== "kitchen" &&
+      session.user?.role !== "admin";
+    const catalog = needsCatalog
+      ? await cachedRequest(
+          "catalog",
+          () => api<Bootstrap["catalog"]>("/api/catalog"),
+          60_000,
+          force,
+        )
+      : cachedValue<Bootstrap["catalog"]>("catalog") || emptyCatalog();
+    if (needsCatalog || cachedValue("catalog")) setCatalogReady(true);
+    setState((current) => ({
+      ...session,
+      catalog,
+      orders:
+        current?.user?.id === session.user?.id ? current?.orders || [] : [],
+    }));
+    if (!session.user || session.user.role !== "consumer") {
+      ordersRequestRef.current += 1;
+      setOrdersLoaded(false);
+      setOrdersLoading(false);
+      setOrdersPage(0);
+      setOrdersTotal(0);
+      invalidateCache("orders:");
+    }
     setLoadError("");
     setSelected((current) =>
       current
-        ? data.catalog.offerings.find((offer) => offer.id === current.id) ||
-          null
+        ? catalog.offerings.find((offer) => offer.id === current.id) || null
         : null,
     );
   }
+  async function refreshCatalog(force = false, freshServer = false) {
+    if (freshServer) invalidateCache("catalog");
+    const catalog = await cachedRequest(
+      "catalog",
+      () =>
+        api<Bootstrap["catalog"]>(
+          freshServer ? "/api/catalog?fresh=1" : "/api/catalog",
+        ),
+      60_000,
+      force,
+    );
+    setState((current) => (current ? { ...current, catalog } : current));
+    setCatalogReady(true);
+    setSelected((current) =>
+      current
+        ? catalog.offerings.find((offer) => offer.id === current.id) || null
+        : null,
+    );
+    return catalog;
+  }
+  async function refreshSession() {
+    invalidateCache("session");
+    const session = await cachedRequest(
+      "session",
+      () => api<SessionData>("/api/session"),
+      300_000,
+      true,
+    );
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            ...session,
+            orders: current.user?.id === session.user?.id ? current.orders : [],
+          }
+        : current,
+    );
+    if (!session.user || session.user.role !== "consumer") {
+      ordersRequestRef.current += 1;
+      invalidateCache("orders:");
+      setOrdersLoaded(false);
+      setOrdersLoading(false);
+      setOrdersPage(0);
+      setOrdersTotal(0);
+    }
+    return session;
+  }
+  async function loadOrders(targetPage = ordersPage, force = false) {
+    const user = state?.user;
+    if (!user || user.role !== "consumer") return;
+    const requestId = ++ordersRequestRef.current;
+    const key = `orders:${user.id}:${targetPage}`;
+    const cached = cachedValue<OrdersPage>(key);
+    if (!cached) setOrdersLoading(true);
+    try {
+      const result = await cachedRequest(
+        key,
+        () => api<OrdersPage>(`/api/orders?limit=10&offset=${targetPage * 10}`),
+        30_000,
+        force,
+      );
+      if (requestId !== ordersRequestRef.current) return;
+      setState((current) =>
+        current?.user?.id === user.id
+          ? { ...current, orders: result.orders }
+          : current,
+      );
+      setOrdersTotal(result.total);
+      setOrdersLoaded(true);
+    } finally {
+      if (requestId === ordersRequestRef.current) setOrdersLoading(false);
+    }
+  }
   useEffect(() => {
-    refresh().catch((cause) =>
+    refresh(false).catch((cause) =>
       setLoadError(
         cause instanceof Error ? cause.message : "No pudimos cargar el menú.",
       ),
@@ -1561,23 +1845,53 @@ export default function App() {
   }, []);
   useEffect(() => {
     const update = () => {
-      if (!document.hidden) refresh().catch(() => {});
+      if (!document.hidden && ["inicio", "buscar", "carrito"].includes(page))
+        refreshCatalog().catch(() => {});
     };
-    if (page === "carrito") update();
-    const timer = window.setInterval(
-      update,
-      page === "carrito" ? 10_000 : 30_000,
+    update();
+    const timer = ["inicio", "buscar", "carrito"].includes(page)
+      ? window.setInterval(
+          () => {
+            if (!document.hidden)
+              refreshCatalog(true, page === "carrito").catch(() => {});
+          },
+          page === "carrito" ? 15_000 : 60_000,
+        )
+      : null;
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      if (timer !== null) window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [page]);
+  useEffect(() => {
+    if (page !== "pedidos" || state?.user?.role !== "consumer") return;
+    loadOrders(ordersPage).catch((cause) =>
+      setLoadError(
+        cause instanceof Error
+          ? cause.message
+          : "No pudimos cargar tus pedidos.",
+      ),
     );
+  }, [page, state?.user?.id, ordersPage]);
+  useEffect(() => {
+    if (page !== "pedidos" || state?.user?.role !== "consumer") return;
+    const update = () => {
+      if (!document.hidden) loadOrders(ordersPage, true).catch(() => {});
+    };
+    const timer = window.setInterval(update, 45_000);
     document.addEventListener("visibilitychange", update);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
     };
-  }, [page]);
+  }, [page, state?.user?.id, ordersPage]);
   useEffect(() => {
     const syncRoute = () => {
       setPage(pageFromHash(window.location.hash));
       setKitchenFilter(kitchenFromHash(window.location.hash));
+      if (pageFromHash(window.location.hash) === "buscar")
+        setMenuFilterManual(false);
       setSelected(null);
       window.scrollTo({ top: 0, behavior: "auto" });
     };
@@ -1592,6 +1906,11 @@ export default function App() {
     if (state?.user?.role === "kitchen" && !kitchenPages.includes(page)) {
       window.history.replaceState(null, "", routes.cocinaCuenta);
       setPage("cocinaCuenta");
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
+    if (state?.user?.role === "admin" && page !== "adminPedidos") {
+      window.history.replaceState(null, "", routes.adminPedidos);
+      setPage("adminPedidos");
       window.scrollTo({ top: 0, behavior: "auto" });
     }
   }, [state?.user?.role, page]);
@@ -1609,13 +1928,53 @@ export default function App() {
       row.kitchenId,
       (kitchenSales.get(row.kitchenId) || 0) + row.units,
     );
-  const featuredWeek = offers.some(
-    (offer) => offer.week === 0 && offer.bookable,
-  )
-    ? 0
-    : 1;
+  const nextMenuDate = nextBookableDate(offers, limaToday());
+  const menuOffers = kitchenFilter
+    ? offers.filter((offer) => offer.kitchenId === kitchenFilter)
+    : offers;
+  const nextFilteredMenuDate = nextBookableDate(menuOffers, limaToday());
+  const hideCurrentWeek =
+    state !== null &&
+    !menuOffers.some((offer) => offer.week === 0 && offer.bookable);
+  const featuredWeek =
+    offers.find((offer) => offer.date === nextMenuDate)?.week ?? 0;
   const featuredWeekName =
     featuredWeek === 0 ? "esta semana" : "la próxima semana";
+  const nextMenuDay = nextMenuDate
+    ? new Date(`${nextMenuDate}T12:00:00Z`).getUTCDay() - 1
+    : null;
+  const nextMenuLabel = nextMenuDate
+    ? nextMenuDate === limaToday()
+      ? "hoy"
+      : `el ${dateLabel(nextMenuDate)}`
+    : null;
+  useEffect(() => {
+    if (page !== "buscar" || !state) return;
+    if (menuFilterManual && !(hideCurrentWeek && week === 0)) return;
+    const targetWeek = nextFilteredMenuDate
+      ? Number(nextFilteredMenuDate >= state.catalog.weeks[1])
+      : hideCurrentWeek
+        ? 1
+        : 0;
+    const targetDay = nextFilteredMenuDate
+      ? new Date(`${nextFilteredMenuDate}T12:00:00Z`).getUTCDay() - 1
+      : null;
+    if (week !== targetWeek) setWeek(targetWeek);
+    if (dayFilter !== targetDay) setDayFilter(targetDay);
+    if (pickupFilter) setPickupFilter(null);
+  }, [
+    page,
+    state,
+    menuFilterManual,
+    hideCurrentWeek,
+    week,
+    dayFilter,
+    pickupFilter,
+    nextFilteredMenuDate,
+  ]);
+  useEffect(() => {
+    setMenuFilterManual(false);
+  }, [state?.catalog.weeks[0]]);
   const featuredSales = (state?.catalog.weeklyDishSales || []).filter(
     (row) => row.week === featuredWeek,
   );
@@ -1624,7 +1983,7 @@ export default function App() {
   );
   const dishCandidates = new Map<string, Offering>();
   for (const offer of offers
-    .filter((offer) => offer.week === featuredWeek && offer.bookable)
+    .filter((offer) => offer.date === nextMenuDate && offer.bookable)
     .sort(
       (a, b) => a.date.localeCompare(b.date) || a.sortOrder - b.sortOrder,
     )) {
@@ -1646,11 +2005,19 @@ export default function App() {
   );
   const topDishes = hasWeeklyBookings
     ? rankedDishes.slice(0, 3)
-    : kitchens
-        .map((kitchen) =>
-          rankedDishes.find((offer) => offer.kitchenId === kitchen.id),
+    : [
+        ...kitchens
+          .map((kitchen) =>
+            rankedDishes.find((offer) => offer.kitchenId === kitchen.id),
+          )
+          .filter((offer): offer is Offering => Boolean(offer)),
+        ...rankedDishes,
+      ]
+        .filter(
+          (offer, index, candidates) =>
+            candidates.findIndex((candidate) => candidate.id === offer.id) ===
+            index,
         )
-        .filter((offer): offer is Offering => Boolean(offer))
         .slice(0, 3);
   const topKitchens = [...kitchens]
     .filter(
@@ -1665,22 +2032,14 @@ export default function App() {
   const featured: FeaturedSlide[] = rankedDishes
     .filter((offer) => Boolean(offer.imageUrl))
     .slice(0, 2)
-    .flatMap((offer) => {
-      const nameOverflow = offer.name.length > 7;
+    .flatMap((offer, index) => {
       const kitchen = kitchens.find((value) => value.id === offer.kitchenId);
       if (!kitchen) return [];
       return [
         {
           kitchen,
           offer,
-          titleLines: nameOverflow
-            ? ["¿Te apetece comer", `sabroso esta semana?`]
-            : ["¿Te apetece", `${offer.name} esta semana?`],
-          subtitle: nameOverflow ? `Plato: ${offer.name}` : null,
-          descriptionLines: [
-            offer.description || `Un plato de ${kitchen.name}.`,
-            "Mira el menú y elige tu día.",
-          ],
+          ...featuredCopy(offer, index),
         },
       ];
     });
@@ -1738,6 +2097,7 @@ export default function App() {
     if (window.location.hash !== routes[next])
       window.history.pushState(null, "", routes[next]);
     setPage(next);
+    if (next === "buscar") setMenuFilterManual(false);
     setKitchenFilter(null);
     setSelected(null);
     window.scrollTo({
@@ -1752,6 +2112,7 @@ export default function App() {
     if (window.location.hash !== route)
       window.history.pushState(null, "", route);
     setPage("buscar");
+    setMenuFilterManual(false);
     setKitchenFilter(id);
     setWeek(0);
     setDayFilter(null);
@@ -1765,6 +2126,22 @@ export default function App() {
         : "smooth",
     });
   }
+  function goToNextMenu() {
+    go("buscar");
+    if (nextMenuDate) {
+      setWeek(featuredWeek);
+      setDayFilter(nextMenuDay);
+      setPickupFilter(null);
+      setQuery("");
+    }
+  }
+  function goToNextKitchen(id: string) {
+    goKitchen(id);
+    if (nextMenuDate) {
+      setWeek(featuredWeek);
+      setDayFilter(nextMenuDay);
+    }
+  }
   function filterKitchen(id: string | null) {
     const route = id ? `#menu/cocina/${id}` : "#menu";
     if (window.location.hash !== route)
@@ -1773,8 +2150,15 @@ export default function App() {
     setPickupFilter(null);
   }
   function changeWeek(next: number) {
+    setMenuFilterManual(true);
     setWeek(next);
-    setDayFilter(next === 0 ? limaDayIndex() : null);
+    const firstDate = nextBookableDate(
+      menuOffers.filter((offer) => offer.week === next),
+      limaToday(),
+    );
+    setDayFilter(
+      firstDate ? new Date(`${firstDate}T12:00:00Z`).getUTCDay() - 1 : null,
+    );
     setPickupFilter(null);
   }
   function follow(event: MouseEvent<HTMLAnchorElement>, next: Page) {
@@ -1870,11 +2254,10 @@ export default function App() {
     setBookingError("");
     bookingKeyRef.current ??= window.crypto.randomUUID();
     try {
-      const latest = await api<Bootstrap>("/api/bootstrap");
-      setState(latest);
+      const latest = await refreshCatalog(true, true);
       if (
         cartRows.some(({ item }) => {
-          const offer = latest.catalog.offerings.find(
+          const offer = latest.offerings.find(
             (current) => current.id === item.offeringId,
           );
           return !offer?.bookable || offer.remaining < item.quantity;
@@ -1902,9 +2285,12 @@ export default function App() {
           quantity: item.quantity,
         })),
       });
-      await refresh();
       bookingKeyRef.current = null;
       setCart([]);
+      invalidateCache("orders:");
+      setOrdersLoaded(false);
+      setOrdersPage(0);
+      await refreshCatalog(true, true);
       go("pedidos");
       setNotice("Reserva confirmada");
       window.setTimeout(() => setNotice(""), 4000);
@@ -1914,26 +2300,50 @@ export default function App() {
           ? cause.message
           : "No pudimos confirmar la reserva.",
       );
-      await refresh().catch(() => {});
+      await refreshCatalog(true, true).catch(() => {});
     } finally {
       setBooking(false);
     }
   }
   async function logout() {
+    await disablePickupNotifications().catch(() => {});
     await api("/api/auth/logout", {});
-    await refresh();
+    invalidateCache();
+    setCatalogReady(false);
+    await refreshSession();
     go("inicio");
   }
   async function kitchenLogout() {
     await api("/api/auth/logout", {});
-    await refresh();
+    invalidateCache();
+    setCatalogReady(false);
+    await refreshSession();
     go("cocina");
+  }
+  async function adminLogout() {
+    await api("/api/auth/logout", {});
+    invalidateCache();
+    setCatalogReady(false);
+    await refreshSession();
+    go("admin");
   }
 
   const kitchenSession = state?.user?.role === "kitchen";
+  const adminSession = state?.user?.role === "admin";
+  const adminArea =
+    !kitchenSession &&
+    (page === "admin" || page === "adminPedidos" || adminSession);
   const kitchenArea =
-    page === "cocina" || kitchenPages.includes(page) || kitchenSession;
+    !adminSession &&
+    (page === "cocina" || kitchenPages.includes(page) || kitchenSession);
   const kitchenHome: Page = kitchenSession ? "cocinaInicio" : "cocina";
+  const areaHome: Page = adminArea
+    ? adminSession
+      ? "adminPedidos"
+      : "admin"
+    : kitchenArea
+      ? kitchenHome
+      : "inicio";
   const kitchenSection: KitchenSection =
     page === "cocinaInicio"
       ? "inicio"
@@ -1961,10 +2371,8 @@ export default function App() {
         <div className="container header-inner">
           <a
             className="brand"
-            href={routes[kitchenArea ? kitchenHome : "inicio"]}
-            onClick={(event) =>
-              follow(event, kitchenArea ? kitchenHome : "inicio")
-            }
+            href={routes[areaHome]}
+            onClick={(event) => follow(event, areaHome)}
             aria-label="Menúu, ir al inicio"
           >
             <img src="/images/menuu-logo.png" width="52" height="49" alt="" />
@@ -1972,7 +2380,16 @@ export default function App() {
               Menú<span className="brand-last-letter">u</span>
             </span>
           </a>
-          {kitchenArea ? (
+          {adminArea ? (
+            <nav className="desktop-nav" aria-label="Navegación de admin">
+              <a
+                href={routes[adminSession ? "adminPedidos" : "admin"]}
+                aria-current="page"
+              >
+                {adminSession ? "Pedidos y entregas" : "Acceso admin"}
+              </a>
+            </nav>
+          ) : kitchenArea ? (
             <nav
               className="desktop-nav kitchen-nav"
               aria-label="Navegación de cocina"
@@ -2049,266 +2466,320 @@ export default function App() {
           </div>
         )}
         {state &&
+          !catalogReady &&
+          ["inicio", "buscar", "carrito"].includes(page) && (
+            <div className="loading-state" role="status">
+              Cargando menús…
+            </div>
+          )}
+        {state &&
           kitchenArea &&
           (kitchenSession ? (
             <KitchenDashboard
               section={kitchenSection}
               user={state.user!}
               onLogout={kitchenLogout}
-              onChanged={refresh}
             />
           ) : (
-            <KitchenAccess onAuthenticated={refresh} />
+            <KitchenAccess
+              onAuthenticated={async () => {
+                await refreshSession();
+              }}
+            />
           ))}
-        {state && !kitchenSession && page === "inicio" && (
-          <>
-            <div className="location-line">
-              <BrandLocationIcon size={22} />
-              <span>Punto de encuentro: comedor de la U</span>
-            </div>
-            {featured.length > 0 && (
-              <FeaturedCarousel slides={featured} onKitchen={goKitchen} />
-            )}
-            <section
-              className="home-discovery"
-              aria-labelledby="popular-dishes-title"
-            >
-              <div className="section-heading">
-                <div>
-                  <span className="eyebrow">
-                    {hasWeeklyBookings ? "LOS MÁS ELEGIDOS" : "PARA DESCUBRIR"}
-                  </span>
-                  <h2 id="popular-dishes-title">
-                    {hasWeeklyBookings
-                      ? `Los platos más pedidos de ${featuredWeekName}`
-                      : topDishes.length
-                        ? `Destacados de ${featuredWeekName}`
-                        : "Menús por venir"}
-                  </h2>
-                  <p>
-                    {hasWeeklyBookings
-                      ? "Ordenados por porciones reservadas para esos días."
-                      : topDishes.length
-                        ? "Aún sin reservas para esos días; aquí tienes platos disponibles."
-                        : "Aquí aparecerán los platos cuando las cocinas publiquen sus menús."}
-                  </p>
-                </div>
-                <button className="section-link" onClick={() => go("buscar")}>
-                  Ver menú completo <ArrowRight size={18} />
-                </button>
+        {state &&
+          adminArea &&
+          (adminSession ? (
+            <AdminDashboard user={state.user!} onLogout={adminLogout} />
+          ) : (
+            <KitchenAccess
+              role="admin"
+              onAuthenticated={async () => {
+                await refreshSession();
+              }}
+            />
+          ))}
+        {state &&
+          catalogReady &&
+          !kitchenSession &&
+          !adminSession &&
+          page === "inicio" && (
+            <>
+              <div className="location-line">
+                <BrandLocationIcon size={22} />
+                <span>
+                  Punto de encuentro: Entrada del Comedor UTEC en piso 2
+                </span>
               </div>
-              {topDishes.length ? (
-                <div className="product-grid">
-                  {topDishes.map((offer, index) => (
-                    <OfferingCard
-                      key={offer.id}
-                      offer={offer}
-                      kitchen={kitchens.find(
-                        (kitchen) => kitchen.id === offer.kitchenId,
-                      )}
-                      highlight={
-                        (weeklyScore(offer)?.units || 0) > 0
-                          ? `N.º ${index + 1} · ${featuredWeekName}`
-                          : undefined
-                      }
-                      onChoose={choose}
-                      onKitchen={goKitchen}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <EmptyState
-                  icon={<BrandDishIcon size={32} />}
-                  title="Aún no hay platos publicados"
-                  body="Vuelve pronto para conocer los menús de las cocinas."
+              {featured.length > 0 && (
+                <FeaturedCarousel
+                  slides={featured}
+                  onKitchen={goToNextKitchen}
                 />
               )}
-            </section>
-            {topKitchens.length > 0 && (
               <section
-                className="home-discovery kitchen-discovery"
-                aria-labelledby="top-kitchens-title"
+                className="home-discovery"
+                aria-labelledby="popular-dishes-title"
               >
                 <div className="section-heading">
                   <div>
-                    <span className="eyebrow">HECHO CERCA DE TU BREAK</span>
-                    <h2 id="top-kitchens-title">
-                      {soldUnits > 0
-                        ? "Cocinas con más pedidos"
-                        : "Cocinas para conocer"}
+                    <span className="eyebrow">
+                      {hasWeeklyBookings
+                        ? "LOS MÁS ELEGIDOS"
+                        : "PARA DESCUBRIR"}
+                    </span>
+                    <h2 id="popular-dishes-title">
+                      {nextMenuLabel
+                        ? `Menús para ${nextMenuLabel}`
+                        : "Menús por venir"}
                     </h2>
                     <p>
-                      {soldUnits > 0
-                        ? "Ordenadas por platos entregados."
-                        : "Explora sus menús de esta semana y la siguiente."}
+                      {hasWeeklyBookings
+                        ? `Ordenados por porciones reservadas de ${featuredWeekName}.`
+                        : topDishes.length
+                          ? "Estos platos tienen reservas disponibles para ese día."
+                          : "Aquí aparecerán los platos cuando las cocinas publiquen sus menús."}
                     </p>
                   </div>
+                  <button className="section-link" onClick={goToNextMenu}>
+                    Ver menú completo <ArrowRight size={18} />
+                  </button>
                 </div>
-                <div className="kitchen-grid">
-                  {topKitchens.map((kitchen) => (
-                    <button
-                      type="button"
-                      className="kitchen-card"
-                      key={kitchen.id}
-                      onClick={() => goKitchen(kitchen.id)}
-                    >
-                      <img
-                        className="kitchen-card-logo"
-                        src={kitchen.logoUrl}
-                        alt=""
-                        loading="lazy"
+                {topDishes.length ? (
+                  <div className="product-grid">
+                    {topDishes.map((offer, index) => (
+                      <OfferingCard
+                        key={offer.id}
+                        offer={offer}
+                        kitchen={kitchens.find(
+                          (kitchen) => kitchen.id === offer.kitchenId,
+                        )}
+                        highlight={
+                          (weeklyScore(offer)?.units || 0) > 0
+                            ? `N.º ${index + 1} · ${featuredWeekName}`
+                            : undefined
+                        }
+                        onChoose={choose}
+                        onKitchen={goToNextKitchen}
                       />
-                      <span className="kitchen-card-copy">
-                        <strong>{kitchen.name}</strong>
-                        <span className="kitchen-rating">
-                          <Star
-                            size={17}
-                            strokeWidth={2.6}
-                            fill={
-                              kitchen.rating === null ? "none" : "currentColor"
-                            }
-                            aria-hidden="true"
-                          />
-                          {kitchen.rating === null
-                            ? "Aún sin puntuación"
-                            : `${kitchen.rating.toFixed(1)} · ${kitchen.ratingCount} ${kitchen.ratingCount === 1 ? "reseña" : "reseñas"}`}
-                        </span>
-                        <span className="kitchen-card-link">
-                          Ver cocina <ArrowRight size={17} />
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-          </>
-        )}
-        {state && !kitchenSession && page === "buscar" && (
-          <section className="page-section">
-            <div className="page-heading">
-              <span className="eyebrow">ELIGE TU ANTOJO</span>
-              <h1>{activeKitchen ? activeKitchen.name : "Menú semanal"}</h1>
-              <p>
-                {activeKitchen
-                  ? activeKitchen.description
-                  : "Revisa los días y la hora de recojo de cada cocina."}
-              </p>
-            </div>
-            {kitchenFilter && !activeKitchen ? (
-              <EmptyState
-                icon={<BrandStoreIcon size={32} />}
-                title="No encontramos esa cocina"
-                body="Revisa las cocinas disponibles en el menú."
-                action={
-                  <Button onClick={() => go("buscar")}>Ver todo el menú</Button>
-                }
-              />
-            ) : (
-              <WeekMenu
-                state={state}
-                week={week}
-                setWeek={changeWeek}
-                dayFilter={dayFilter}
-                setDayFilter={setDayFilter}
-                pickupFilter={pickupFilter}
-                setPickupFilter={setPickupFilter}
-                pickupOptions={pickupOptions}
-                kitchenFilter={kitchenFilter}
-                onKitchen={(id) => filterKitchen(id)}
-                onAllKitchens={() => filterKitchen(null)}
-                query={query}
-                onQuery={setQuery}
-                visible={visible}
-                onChoose={choose}
-              />
-            )}
-          </section>
-        )}
-        {state && !kitchenSession && page === "carrito" && (
-          <section className="page-section narrow">
-            <div className="page-heading">
-              <span className="eyebrow">TU PEDIDO</span>
-              <h1>Tu carrito</h1>
-              <p>Revisa el cierre de reserva y el recojo de cada plato.</p>
-            </div>
-            {cartRows.length === 0 ? (
-              <EmptyState
-                icon={<BrandOrderBagIcon size={32} />}
-                title="Tu carrito está vacío"
-                body="Elige un plato del menú y aparecerá aquí."
-                action={
-                  <Button onClick={() => go("buscar")}>
-                    Ver menús <ArrowRight size={18} />
-                  </Button>
-                }
-              />
-            ) : (
-              <div className="cart-layout">
-                <div className="cart-items">
-                  {cartRows.map(({ item, offer }) => (
-                    <CartItemCard
-                      key={item.key}
-                      item={item}
-                      offer={offer}
-                      onQuantity={quantity}
-                      onRemove={removeFromCart}
-                    />
-                  ))}
-                </div>
-                <aside className="cart-summary">
-                  <h2>Resumen</h2>
-                  <div>
-                    <span>Total</span>
-                    <strong>{money(total)}</strong>
+                    ))}
                   </div>
-                  <p>
-                    Recoge cada plato en el comedor durante la ventana indicada.
-                  </p>
-                  <p>
-                    <strong>Pago:</strong> QR al recibir tu comida.
-                  </p>
-                  {bookingError && (
-                    <p className="form-error" role="alert">
-                      {bookingError}
-                    </p>
-                  )}
-                  {state.user && !state.user.bookingAllowed && (
-                    <p className="form-error" role="status">
-                      No puedes reservar mientras tengas un pedido marcado como
-                      no recogido.
-                    </p>
-                  )}
-                  <Button
-                    onClick={submitBooking}
-                    disabled={
-                      booking ||
-                      state.user?.bookingAllowed === false ||
-                      cartRows.some(
-                        ({ item, offer }) =>
-                          !offer.bookable || offer.remaining < item.quantity,
-                      )
-                    }
-                  >
-                    {booking ? "Confirmando…" : "Confirmar reserva"}{" "}
-                    <ArrowRight size={18} />
-                  </Button>
-                  {cartRows.some(
-                    ({ item, offer }) =>
-                      !offer.bookable || offer.remaining < item.quantity,
-                  ) && (
-                    <p className="form-error">
-                      Hay un plato agotado, una reserva cerrada o más porciones
-                      en el carrito que las disponibles. Elimina o ajusta ese
-                      plato para continuar.
-                    </p>
-                  )}
-                </aside>
+                ) : (
+                  <EmptyState
+                    icon={<BrandDishIcon size={32} />}
+                    title="Aún no hay platos publicados"
+                    body="Vuelve pronto para conocer los menús de las cocinas."
+                  />
+                )}
+              </section>
+              {topKitchens.length > 0 && (
+                <section
+                  className="home-discovery kitchen-discovery"
+                  aria-labelledby="top-kitchens-title"
+                >
+                  <div className="section-heading">
+                    <div>
+                      <span className="eyebrow">HECHO CERCA DE TU BREAK</span>
+                      <h2 id="top-kitchens-title">
+                        {soldUnits > 0
+                          ? "Cocinas con más pedidos"
+                          : "Cocinas para conocer"}
+                      </h2>
+                      <p>
+                        {soldUnits > 0
+                          ? "Ordenadas por platos entregados."
+                          : "Explora sus menús de esta semana y la siguiente."}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="kitchen-grid">
+                    {topKitchens.map((kitchen) => (
+                      <button
+                        type="button"
+                        className="kitchen-card"
+                        key={kitchen.id}
+                        onClick={() => goKitchen(kitchen.id)}
+                      >
+                        <img
+                          className="kitchen-card-logo"
+                          src={kitchen.logoUrl}
+                          alt=""
+                          loading="lazy"
+                        />
+                        <span className="kitchen-card-copy">
+                          <strong>{kitchen.name}</strong>
+                          <span className="kitchen-rating">
+                            <Star
+                              size={17}
+                              strokeWidth={2.6}
+                              fill={
+                                kitchen.rating === null
+                                  ? "none"
+                                  : "currentColor"
+                              }
+                              aria-hidden="true"
+                            />
+                            {kitchen.rating === null
+                              ? "Aún sin puntuación"
+                              : `${kitchen.rating.toFixed(1)} · ${kitchen.ratingCount} ${kitchen.ratingCount === 1 ? "reseña" : "reseñas"}`}
+                          </span>
+                          <span className="kitchen-card-link">
+                            Ver cocina <ArrowRight size={17} />
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
+          )}
+        {state &&
+          catalogReady &&
+          !kitchenSession &&
+          !adminSession &&
+          page === "buscar" && (
+            <section className="page-section">
+              <div className="page-heading">
+                <span className="eyebrow">ELIGE TU ANTOJO</span>
+                <h1>{activeKitchen ? activeKitchen.name : "Menú semanal"}</h1>
+                <p>
+                  {activeKitchen
+                    ? activeKitchen.description
+                    : "Revisa los días y la hora de recojo de cada cocina."}
+                </p>
               </div>
-            )}
-          </section>
-        )}
-        {state && !kitchenSession && page === "pedidos" && (
+              {kitchenFilter && !activeKitchen ? (
+                <EmptyState
+                  icon={<BrandStoreIcon size={32} />}
+                  title="No encontramos esa cocina"
+                  body="Revisa las cocinas disponibles en el menú."
+                  action={
+                    <Button onClick={() => go("buscar")}>
+                      Ver todo el menú
+                    </Button>
+                  }
+                />
+              ) : (
+                <WeekMenu
+                  state={state}
+                  week={week}
+                  setWeek={changeWeek}
+                  hideCurrentWeek={hideCurrentWeek}
+                  dayFilter={dayFilter}
+                  setDayFilter={(day) => {
+                    setMenuFilterManual(true);
+                    setDayFilter(day);
+                  }}
+                  pickupFilter={pickupFilter}
+                  setPickupFilter={(pickup) => {
+                    setMenuFilterManual(true);
+                    setPickupFilter(pickup);
+                  }}
+                  pickupOptions={pickupOptions}
+                  kitchenFilter={kitchenFilter}
+                  onKitchen={(id) => filterKitchen(id)}
+                  onAllKitchens={() => filterKitchen(null)}
+                  query={query}
+                  onQuery={setQuery}
+                  visible={visible}
+                  onChoose={choose}
+                />
+              )}
+            </section>
+          )}
+        {state &&
+          catalogReady &&
+          !kitchenSession &&
+          !adminSession &&
+          page === "carrito" && (
+            <section className="page-section narrow">
+              <div className="page-heading">
+                <span className="eyebrow">TU PEDIDO</span>
+                <h1>Tu carrito</h1>
+                <p>Revisa el cierre de reserva y el recojo de cada plato.</p>
+              </div>
+              {cartRows.length === 0 ? (
+                <EmptyState
+                  icon={<BrandOrderBagIcon size={32} />}
+                  title="Tu carrito está vacío"
+                  body="Elige un plato del menú y aparecerá aquí."
+                  action={
+                    <Button onClick={() => go("buscar")}>
+                      Ver menús <ArrowRight size={18} />
+                    </Button>
+                  }
+                />
+              ) : (
+                <div className="cart-layout">
+                  <div className="cart-items">
+                    {cartRows.map(({ item, offer }) => (
+                      <CartItemCard
+                        key={item.key}
+                        item={item}
+                        offer={offer}
+                        onQuantity={quantity}
+                        onRemove={removeFromCart}
+                      />
+                    ))}
+                  </div>
+                  <aside className="cart-summary">
+                    <h2>Resumen</h2>
+                    <div>
+                      <span>Total</span>
+                      <strong>{money(total)}</strong>
+                    </div>
+                    <p>
+                      Recoge cada plato en el comedor durante la ventana
+                      indicada.
+                    </p>
+                    <p>
+                      <strong>Pago:</strong> QR al recibir tu comida.
+                    </p>
+                    {state.user?.role === "consumer" && (
+                      <PickupNotifications userId={state.user.id} />
+                    )}
+                    {bookingError && (
+                      <p className="form-error" role="alert">
+                        {bookingError}
+                      </p>
+                    )}
+                    {state.user && !state.user.bookingAllowed && (
+                      <p className="form-error" role="status">
+                        No puedes reservar mientras tengas un pedido marcado
+                        como no recogido.
+                      </p>
+                    )}
+                    <Button
+                      onClick={submitBooking}
+                      disabled={
+                        booking ||
+                        state.user?.bookingAllowed === false ||
+                        cartRows.some(
+                          ({ item, offer }) =>
+                            !offer.bookable || offer.remaining < item.quantity,
+                        )
+                      }
+                    >
+                      {booking ? "Confirmando…" : "Confirmar reserva"}{" "}
+                      <ArrowRight size={18} />
+                    </Button>
+                    {cartRows.some(
+                      ({ item, offer }) =>
+                        !offer.bookable || offer.remaining < item.quantity,
+                    ) && (
+                      <p className="form-error">
+                        Hay un plato agotado, una reserva cerrada o más
+                        porciones en el carrito que las disponibles. Elimina o
+                        ajusta ese plato para continuar.
+                      </p>
+                    )}
+                  </aside>
+                </div>
+              )}
+            </section>
+          )}
+        {state && !kitchenSession && !adminSession && page === "pedidos" && (
           <section className="page-section narrow">
             <div className="page-heading">
               <span className="eyebrow">TUS BREAKS</span>
@@ -2326,6 +2797,12 @@ export default function App() {
                   </Button>
                 }
               />
+            ) : !ordersLoaded ? (
+              <p role="status">
+                {ordersLoading
+                  ? "Cargando tus pedidos…"
+                  : "Actualiza para cargar tus pedidos."}
+              </p>
             ) : state.orders.length === 0 ? (
               <EmptyState
                 icon={<BrandOrdersIcon size={30} />}
@@ -2343,14 +2820,49 @@ export default function App() {
                   <OrderCard
                     key={order.id}
                     order={order}
-                    onReviewed={refresh}
+                    onReviewed={async () => {
+                      invalidateCache("orders:");
+                      await Promise.all([
+                        loadOrders(ordersPage, true),
+                        refreshCatalog(true, true),
+                      ]);
+                    }}
                   />
                 ))}
+                {ordersTotal > 10 && (
+                  <nav className="orders-pages" aria-label="Páginas de pedidos">
+                    <Button
+                      variant="secondary"
+                      disabled={ordersPage === 0 || ordersLoading}
+                      onClick={() => {
+                        setOrdersLoaded(false);
+                        setOrdersPage(ordersPage - 1);
+                      }}
+                    >
+                      Anterior
+                    </Button>
+                    <span>
+                      Página {ordersPage + 1} de {Math.ceil(ordersTotal / 10)}
+                    </span>
+                    <Button
+                      variant="secondary"
+                      disabled={
+                        (ordersPage + 1) * 10 >= ordersTotal || ordersLoading
+                      }
+                      onClick={() => {
+                        setOrdersLoaded(false);
+                        setOrdersPage(ordersPage + 1);
+                      }}
+                    >
+                      Siguiente
+                    </Button>
+                  </nav>
+                )}
               </div>
             )}
           </section>
         )}
-        {state && !kitchenSession && page === "cuenta" && (
+        {state && !kitchenSession && !adminSession && page === "cuenta" && (
           <section className="page-section narrow auth-page">
             {state.user ? (
               <>
@@ -2361,7 +2873,9 @@ export default function App() {
                 <AccountProfile
                   user={state.user}
                   careers={state.careers}
-                  onSaved={refresh}
+                  onSaved={async () => {
+                    await refreshSession();
+                  }}
                   onLogout={logout}
                 />
               </>
@@ -2370,7 +2884,7 @@ export default function App() {
                 careers={state.careers}
                 message={authMessage}
                 onAuthenticated={async () => {
-                  await refresh();
+                  await refreshSession();
                   setAuthMessage("");
                 }}
               />
@@ -2378,31 +2892,34 @@ export default function App() {
           </section>
         )}
       </main>
-      {!kitchenSession && page === "inicio" && itemCount > 0 && (
-        <aside className="cart-ribbon" aria-label="Productos en el carrito">
-          <span className="cart-ribbon-icon">
-            <BrandCartIcon size={25} inverse />
-          </span>
-          <div className="cart-ribbon-copy">
-            <strong>
-              {itemCount}{" "}
-              {itemCount === 1 ? "plato en tu carrito" : "platos en tu carrito"}
-            </strong>
-            <span>Listos para revisar · {money(total)}</span>
-          </div>
-          <Button variant="secondary" onClick={() => go("carrito")}>
-            Ir al carrito <ArrowRight size={18} />
-          </Button>
-        </aside>
-      )}
+      {!kitchenSession &&
+        !adminSession &&
+        page === "inicio" &&
+        itemCount > 0 && (
+          <aside className="cart-ribbon" aria-label="Productos en el carrito">
+            <span className="cart-ribbon-icon">
+              <BrandCartIcon size={25} inverse />
+            </span>
+            <div className="cart-ribbon-copy">
+              <strong>
+                {itemCount}{" "}
+                {itemCount === 1
+                  ? "plato en tu carrito"
+                  : "platos en tu carrito"}
+              </strong>
+              <span>Listos para revisar · {money(total)}</span>
+            </div>
+            <Button variant="secondary" onClick={() => go("carrito")}>
+              Ir al carrito <ArrowRight size={18} />
+            </Button>
+          </aside>
+        )}
       <footer className="site-footer">
         <div className="container footer-inner">
           <a
             className="footer-brand"
-            href={routes[kitchenArea ? kitchenHome : "inicio"]}
-            onClick={(event) =>
-              follow(event, kitchenArea ? kitchenHome : "inicio")
-            }
+            href={routes[areaHome]}
+            onClick={(event) => follow(event, areaHome)}
             aria-label="Menúu, ir al inicio"
           >
             <img src="/images/menuu-logo.png" width="37" height="35" alt="" />
@@ -2414,15 +2931,21 @@ export default function App() {
           <button
             type="button"
             className="footer-notice-button"
-            onClick={() => setDataNotice(kitchenArea ? "kitchen" : "consumer")}
+            onClick={() =>
+              setDataNotice(
+                adminArea ? "admin" : kitchenArea ? "kitchen" : "consumer",
+              )
+            }
           >
-            {kitchenArea
-              ? "Datos y piloto para cocinas"
-              : "Privacidad y piloto"}
+            {adminArea
+              ? "Datos y piloto para admin"
+              : kitchenArea
+                ? "Datos y piloto para cocinas"
+                : "Privacidad y piloto"}
           </button>
         </div>
       </footer>
-      {!kitchenArea && (
+      {!kitchenArea && !adminArea && (
         <nav className="mobile-nav" aria-label="Navegación principal">
           {navigation.map(({ id, label, icon: Icon }) => (
             <a
@@ -2459,6 +2982,7 @@ export default function App() {
           ))}
         </nav>
       )}
+      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice)} />
       {selected && (
         <CustomizationDialog
           key={selected.id}
@@ -2489,6 +3013,7 @@ function WeekMenu({
   state,
   week,
   setWeek,
+  hideCurrentWeek,
   dayFilter,
   setDayFilter,
   pickupFilter,
@@ -2505,6 +3030,7 @@ function WeekMenu({
   state: Bootstrap;
   week: number;
   setWeek: (week: number) => void;
+  hideCurrentWeek: boolean;
   dayFilter: number | null;
   setDayFilter: (day: number | null) => void;
   pickupFilter: string | null;
@@ -2542,14 +3068,16 @@ function WeekMenu({
     <>
       <div className="menu-filters">
         <div className="week-tabs" role="group" aria-label="Semana del menú">
-          <button
-            type="button"
-            aria-pressed={week === 0}
-            className={week === 0 ? "active" : ""}
-            onClick={() => setWeek(0)}
-          >
-            Esta semana
-          </button>
+          {!hideCurrentWeek && (
+            <button
+              type="button"
+              aria-pressed={week === 0}
+              className={week === 0 ? "active" : ""}
+              onClick={() => setWeek(0)}
+            >
+              Esta semana
+            </button>
+          )}
           <button
             type="button"
             aria-pressed={week === 1}
@@ -2602,6 +3130,7 @@ function WeekMenu({
             <button
               type="button"
               aria-pressed={!kitchenFilter}
+              onMouseDown={(event) => event.preventDefault()}
               onClick={onAllKitchens}
             >
               <BrandStoreIcon size={20} />
@@ -2612,6 +3141,7 @@ function WeekMenu({
                 type="button"
                 key={kitchen.id}
                 aria-pressed={kitchenFilter === kitchen.id}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => onKitchen(kitchen.id)}
               >
                 <img src={kitchen.logoUrl} alt="" />
@@ -2656,6 +3186,7 @@ function WeekMenu({
             <button
               type="button"
               aria-pressed={!pickupFilter}
+              onMouseDown={(event) => event.preventDefault()}
               onClick={(event) => choosePickup(null, event)}
             >
               Cualquier horario
@@ -2665,6 +3196,7 @@ function WeekMenu({
                 type="button"
                 key={option.key}
                 aria-pressed={pickupFilter === option.key}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={(event) => choosePickup(option.key, event)}
               >
                 {pickupWindow(option.start, option.end)}
@@ -2803,6 +3335,8 @@ function OrderCard({
   const [foodRatings, setFoodRatings] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState(false);
   const afterDelivery =
     new Date(`${order.date}T${order.deliveryTime}:00-05:00`) <= new Date();
   const canReview =
@@ -2821,6 +3355,24 @@ function OrderCard({
             ? "Cancelado"
             : "Reservado";
   const settled = order.status !== "reservado";
+  const canCancel = order.status === "reservado" && !afterDelivery;
+  async function cancelReservation() {
+    setCancelBusy(true);
+    setError("");
+    try {
+      await api(`/api/orders/${order.id}/cancel`, {});
+      await onReviewed();
+      setCancelOpen(false);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "No pudimos cancelar tu reserva.",
+      );
+    } finally {
+      setCancelBusy(false);
+    }
+  }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
@@ -2876,7 +3428,7 @@ function OrderCard({
         ))}
       </div>
       <div className="order-pickup">
-        <CalendarDays size={20} />
+        <BrandCalendarIcon size={20} />
         <div>
           <strong>Recojo</strong>
           <span>
@@ -2889,6 +3441,43 @@ function OrderCard({
         <span>{order.payment}</span>
         <strong>Total {money(order.totalSoles)}</strong>
       </div>
+      {canCancel && (
+        <div className="order-cancel">
+          {cancelOpen ? (
+            <div className="order-cancel-confirm">
+              <p>
+                ¿Cancelar esta reserva? Se liberarán las porciones para otros
+                estudiantes.
+              </p>
+              <div>
+                <Button
+                  variant="secondary"
+                  onClick={() => setCancelOpen(false)}
+                  disabled={cancelBusy}
+                >
+                  Volver
+                </Button>
+                <Button onClick={cancelReservation} disabled={cancelBusy}>
+                  {cancelBusy ? "Cancelando…" : "Sí, cancelar reserva"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="order-cancel-link"
+              onClick={() => setCancelOpen(true)}
+            >
+              Cancelar reserva
+            </button>
+          )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
       {order.kitchenRating !== null && (
         <p className="review-saved">
           <Star size={17} fill="currentColor" aria-hidden="true" /> Calificaste
@@ -2902,7 +3491,8 @@ function OrderCard({
       )}
       {order.status === "no_se_presento" && (
         <p className="review-note">
-          Delivery registró que no se recogió este pedido.
+          No se registró el recojo dentro de los 15 minutos posteriores a la
+          hora prevista.
         </p>
       )}
       {order.status === "entregado" &&

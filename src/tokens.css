@@ -11,6 +11,9 @@
   --color-surface: #ffffff;
   --color-border: #d7ddcb;
   --color-error: #a83629;
+  --color-status-pending-bg: #fff3e8;
+  --color-status-delivered-bg: #eef1e5;
+  --color-status-cancelled-bg: #fbeae5;
   --color-scroll-track: #eef1e5;
   --color-scroll-thumb: #5d8c70;
   --color-scroll-thumb-hover: #075338;

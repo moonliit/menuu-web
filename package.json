@@ -12,6 +12,7 @@
     "build": "tsc -b && vite build",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
+    "admin:create": "node scripts/create-admin.mjs",
     "test:libsql": "node --env-file-if-exists=.env scripts/test-libsql.mjs",
     "lint": "eslint . --ignore-pattern dist",
     "lint:fix": "eslint . --ignore-pattern dist --fix",
@@ -23,7 +24,8 @@
     "@libsql/client": "^0.18.0",
     "lucide-react": "^1.31.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/node": "22.19.19",

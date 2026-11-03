@@ -712,6 +712,55 @@ p {
   width: 100%;
   margin-top: 18px;
 }
+.cart-summary > .pickup-notifications {
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--color-text);
+}
+.pickup-notifications > svg {
+  flex: 0 0 auto;
+  color: var(--color-brand);
+  margin-top: 2px;
+}
+.pickup-notifications > div {
+  min-width: 0;
+}
+.pickup-notifications strong {
+  display: block;
+  font-size: 14px;
+}
+.pickup-notifications p {
+  margin: 3px 0 0;
+}
+.pickup-notifications button {
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-background);
+  color: var(--color-brand);
+  font:
+    600 14px "DM Sans",
+    sans-serif;
+  cursor: pointer;
+}
+.pickup-notifications button:hover {
+  border-color: var(--color-brand);
+}
+.pickup-notifications button:focus-visible {
+  outline: 3px solid var(--color-orange-soft);
+  outline-offset: 2px;
+}
+.pickup-notifications button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.pickup-notifications .pickup-notifications-error {
+  color: var(--color-error);
+}
 .site-footer {
   border-top: 1px solid var(--color-border);
   background: var(--color-background);
@@ -1202,6 +1251,10 @@ p {
   background: white;
   box-shadow: var(--shadow-card);
 }
+.kitchen-picker-options {
+  left: 0;
+  right: auto;
+}
 .kitchen-picker-options button,
 .pickup-picker-options button {
   display: flex;
@@ -1511,6 +1564,11 @@ p {
 .offer-stock-soldout {
   color: var(--color-orange-ink);
   font-weight: 600;
+}
+.offer-deadline-ended {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: currentColor;
 }
 .custom-dialog {
   width: min(100% - 30px, 570px);
@@ -2513,6 +2571,9 @@ p {
 .career-picker-trigger > span {
   min-width: 0;
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .career-picker-trigger .placeholder {
   color: #657664;
@@ -2522,8 +2583,14 @@ p {
   color: var(--color-brand);
   transition: transform 0.2s ease;
 }
-.career-picker-trigger[aria-expanded="true"] > svg {
+.career-picker-trigger .career-picker-selected {
+  color: var(--color-orange-display);
+}
+.career-picker-trigger[aria-expanded="true"] > svg:last-child {
   transform: rotate(180deg);
+}
+.career-picker-native {
+  display: none;
 }
 .career-picker-options {
   position: absolute;
@@ -2955,6 +3022,18 @@ p {
   display: grid;
   gap: 18px;
 }
+.orders-pages {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--color-muted);
+  font-size: 14px;
+}
+.orders-pages .button {
+  min-height: 44px;
+}
 .order-card {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
@@ -3039,6 +3118,35 @@ p {
   color: var(--color-text);
   font-weight: 600;
 }
+.order-cancel {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+.order-cancel-link {
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-orange-ink);
+  font: 600 14px var(--font-body);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.order-cancel-link:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 3px;
+}
+.order-cancel-confirm p {
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+.order-cancel-confirm > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .review-note,
 .review-saved {
   margin-top: 14px;
@@ -3122,7 +3230,11 @@ p {
     margin-bottom: 10px;
   }
   .auth-layout-details .auth-card form {
-    gap: 8px;
+    gap: 20px;
+  }
+  .auth-layout-details .auth-card {
+    min-height: 0;
+    padding-bottom: 24px;
   }
   .auth-details-fields {
     row-gap: 6px;
@@ -3214,6 +3326,71 @@ p {
     padding-inline: 9px;
     gap: 6px;
     font-size: 14px;
+  }
+  .auth-layout-details .auth-details-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .auth-layout-details .auth-details-fields > * {
+    grid-column: 1;
+  }
+  .auth-layout-details .auth-details-fields label,
+  .auth-layout-details .career-picker {
+    gap: 7px;
+  }
+  .career-picker-trigger,
+  .career-picker-options {
+    display: none;
+  }
+  .career-picker-native {
+    position: relative;
+    display: block;
+    min-width: 0;
+  }
+  .career-picker-native select {
+    display: block;
+    width: 100%;
+    min-height: 52px;
+    appearance: none;
+    padding: 11px 70px 11px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-field);
+    background: white;
+    color: var(--color-text);
+    font: 400 16px/1.45 var(--font-body);
+    white-space: normal;
+  }
+  .career-picker-native .career-picker-native-placeholder {
+    color: #657664;
+  }
+  .career-picker-native select[aria-invalid="true"] {
+    border-color: var(--color-error);
+  }
+  .career-picker-native select:focus-visible {
+    outline: 3px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+  .career-picker-native-icons {
+    position: absolute;
+    top: 50%;
+    right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transform: translateY(-50%);
+    color: var(--color-brand);
+    pointer-events: none;
+  }
+  .career-picker-native-icons svg:first-child:not(:last-child) {
+    color: var(--color-orange-display);
+  }
+  .auth-layout-details .auth-actions {
+    margin-top: 0;
+    padding-top: 4px;
+  }
+  .auth-layout-details .auth-photo {
+    min-height: 280px;
+    height: 280px;
   }
   .app-shell:has(.auth-page) {
     background-size: 260px auto;
@@ -3467,7 +3644,6 @@ p {
 }
 .featured-slide-green .welcome-copy h1,
 .featured-slide-green .welcome-copy h1 span,
-.featured-slide-green .welcome-copy h3 span,
 .featured-slide-green .welcome-copy p {
   color: var(--color-background);
 }
@@ -3487,10 +3663,6 @@ p {
 }
 .featured-slide .welcome-copy h1 {
   font-size: clamp(37px, 3.65vw, 49px);
-  max-width: none;
-}
-.featured-slide .welcome-copy h3 {
-  padding-bottom: 20px;
   max-width: none;
 }
 .featured-text-line {
@@ -3519,6 +3691,25 @@ p {
 }
 .featured-slide .welcome-photo .featured-food-photo {
   object-position: center;
+}
+.featured-slide .welcome-photo .featured-dish-label {
+  position: absolute;
+  z-index: 2;
+  right: auto;
+  left: 16px;
+  bottom: 16px;
+  display: inline-block;
+  max-width: calc(100% - 32px);
+  padding: 7px 12px;
+  border-radius: 12px;
+  background: rgb(255 250 242 / 96%);
+  color: var(--color-brand);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-transform: none;
+  box-shadow: 0 4px 14px rgb(7 83 56 / 14%);
 }
 .featured-logo-badge {
   position: absolute;
@@ -3698,6 +3889,12 @@ p {
     width: 23px;
     height: 23px;
   }
+  .kitchen-picker-options {
+    width: min(310px, calc(100vw - 40px));
+    max-width: none;
+    max-height: min(320px, 48dvh);
+    overflow-y: auto;
+  }
   .pickup-picker summary {
     gap: 6px;
     padding-inline: 8px;
@@ -3726,9 +3923,12 @@ p {
     width: 52px;
     height: 52px;
   }
+  .featured-slide .welcome-photo .featured-dish-label {
+    bottom: 16px;
+  }
   .featured-arrow {
-    --arrow-y: 0px;
-    top: 86px;
+    --arrow-y: -50%;
+    top: 215px;
     bottom: auto;
     width: 44px;
     height: 44px;
@@ -3765,7 +3965,7 @@ p {
     height: 205px;
   }
   .featured-arrow {
-    top: 81px;
+    top: 205px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
