@@ -21,18 +21,21 @@ if (
   process.exitCode = 1;
 } else {
   process.env.TURSO_DATABASE_URL = databaseUrl;
+
   if (process.env.MENUU_ADMIN_AUTH_TOKEN)
     process.env.TURSO_AUTH_TOKEN = process.env.MENUU_ADMIN_AUTH_TOKEN;
   else delete process.env.TURSO_AUTH_TOKEN;
   const { migrate } = await import("./migrate.mjs");
   const { closeDb, getDb } = await import("../server/db.mjs");
   const { hashPassword } = await import("../server/store.mjs");
+
   try {
     await migrate();
     const existing = await getDb().query(
       "SELECT id FROM users WHERE email=$1",
       [email],
     );
+
     if (existing.rowCount)
       throw new Error("Ya existe una cuenta con ese correo.");
     await getDb().query(

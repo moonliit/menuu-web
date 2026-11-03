@@ -26,6 +26,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     });
 
     if (code) process.exitCode = code;
+
     if (!code) {
       const adminDbUrl = `file:${join(directory, "fresh-admin.db")}`;
       const adminCode = await new Promise((resolve, reject) => {
@@ -42,15 +43,19 @@ if (!process.env.MENUU_TEST_DB_PATH) {
             },
           },
         );
+
         child.on("error", reject);
         child.on("exit", (value) => resolve(value || 0));
       });
+
       assert.equal(adminCode, 0);
       const freshDb = createClient({ url: adminDbUrl });
+
       try {
         const admin = await freshDb.execute(
           "SELECT role,kitchen_id FROM users WHERE email='admin-fresh@menuu.test'",
         );
+
         assert.equal(admin.rows[0].role, "admin");
         assert.equal(admin.rows[0].kitchen_id, null);
       } finally {
@@ -81,10 +86,12 @@ if (!process.env.MENUU_TEST_DB_PATH) {
   const {
     cancelOrder,
     createBooking,
+    findUserByGoogleSub,
     getCatalog,
     getOrders,
     insertSession,
     insertUser,
+    linkGoogleSub,
     submitReview,
   } = await import("../server/repository.mjs");
   const { kitchenData, kitchenImage, saveDish, saveKitchenImage, saveOffer } =
@@ -101,6 +108,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
 
   try {
     const migrationDb = getDb();
+
     await migrationDb.query(
       "CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))",
     );
@@ -110,6 +118,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       ),
       "utf8",
     );
+
     for (const statement of initialSql
       .split(/;\s*(?:\r?\n|$)/)
       .map((value) => value.trim())
@@ -145,6 +154,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     await migrate();
     await migrate();
     const db = getDb();
+
     assert.equal(
       (
         await db.query(
@@ -164,6 +174,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         "SELECT reserved_count,sold_out_at FROM offers WHERE id='old-offer'",
       )
     ).rows[0];
+
     assert.equal(reconciled.reserved_count, 0);
     assert.equal(reconciled.sold_out_at, null);
 
@@ -183,6 +194,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     }));
 
     for (const consumer of consumers) await insertUser(consumer);
+    await linkGoogleSub(consumers[0].id, "google-sub-0");
+    assert.equal(
+      (await findUserByGoogleSub("google-sub-0")).id,
+      consumers[0].id,
+    );
     const dishId = await saveDish("test-kitchen", {
       name: "Almuerzo temporal",
       description: "Con arroz.",
@@ -251,29 +267,56 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     );
     assert.equal((await getCatalog()).offerings[0].remaining, 0);
     assert.equal((await getOrders(consumers[0].id)).length, 1);
-    const previousVapid = [process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY,
-      process.env.VAPID_SUBJECT, process.env.CRON_SECRET];
+    const previousVapid = [
+      process.env.VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY,
+      process.env.VAPID_SUBJECT,
+      process.env.CRON_SECRET,
+    ];
+
     process.env.VAPID_PUBLIC_KEY = "test-public-key";
     process.env.VAPID_PRIVATE_KEY = "test-private-key";
     process.env.VAPID_SUBJECT = "mailto:avisos@example.com";
     process.env.CRON_SECRET = "test-secret-at-least-24-characters";
-    assert.equal(validDispatchSecret(`Bearer ${process.env.CRON_SECRET}`), true);
+    assert.equal(
+      validDispatchSecret(`Bearer ${process.env.CRON_SECRET}`),
+      true,
+    );
     assert.equal(validDispatchSecret("Bearer wrong-secret"), false);
     const subscription = {
       endpoint: "https://fcm.googleapis.com/fcm/send/test-device",
       keys: { p256dh: "A".repeat(88), auth: "B".repeat(22) },
     };
+
     await savePushSubscription(consumers[0].id, subscription);
     const reminderTime = new Date(`${offerDate}T12:55:15-05:00`);
     const pushed = [];
-    assert.equal((await dispatchPickupReminders(reminderTime, async (target, payload) => {
-      pushed.push({ target, payload: JSON.parse(payload) });
-    })).sent, 1);
+
+    assert.equal(
+      (
+        await dispatchPickupReminders(reminderTime, async (target, payload) => {
+          pushed.push({ target, payload: JSON.parse(payload) });
+        })
+      ).sent,
+      1,
+    );
     assert.equal(pushed[0].target.endpoint, subscription.endpoint);
     assert.match(pushed[0].payload.body, /5 minutos/);
-    assert.equal((await dispatchPickupReminders(reminderTime, async () => pushed.push("duplicate"))).sent, 0);
+    assert.equal(
+      (
+        await dispatchPickupReminders(reminderTime, async () =>
+          pushed.push("duplicate"),
+        )
+      ).sent,
+      0,
+    );
     assert.equal(pushed.length, 1);
-    ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT", "CRON_SECRET"].forEach((name, index) => {
+    [
+      "VAPID_PUBLIC_KEY",
+      "VAPID_PRIVATE_KEY",
+      "VAPID_SUBJECT",
+      "CRON_SECRET",
+    ].forEach((name, index) => {
       if (previousVapid[index] === undefined) delete process.env[name];
       else process.env[name] = previousVapid[index];
     });
@@ -377,36 +420,114 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
       });
 
-      assert.equal(registered.status, 201);
-      const cookie = registered.headers.get("set-cookie").split(";")[0];
+      assert.equal(registered.status, 403);
+
+      const consumerToken = "c".repeat(64);
+
+      await insertSession(consumerToken, consumers[0].id);
+      const cookie = `menuu_session=${consumerToken}`;
       const bootstrap = await fetch(`${base}/api/bootstrap`, {
         headers: { Cookie: cookie },
       });
 
       assert.equal(bootstrap.status, 200);
-      assert.equal((await bootstrap.json()).user.email, "nueva@utec.edu.pe");
+      assert.equal(
+        (await bootstrap.json()).user.email,
+        "temporal0@utec.edu.pe",
+      );
+      // Las requests sin un credential real de Google se rechazan.
+      const googleNew = await fetch(`${base}/api/auth/google`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "alumno.google@utec.edu.pe",
+          name: "Alumno Google",
+        }),
+      });
+
+      assert.equal(googleNew.status, 401);
+      for (let attempt = 0; attempt < 9; attempt += 1) {
+        const response = await fetch(`${base}/api/auth/google`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
+        });
+
+        assert.equal(response.status, 401);
+      }
+      const rateLimitedGoogle = await fetch(`${base}/api/auth/google`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+
+      assert.equal(rateLimitedGoogle.status, 429);
+      assert.ok(Number(rateLimitedGoogle.headers.get("retry-after")) >= 1);
+
       const sessionResponse = await fetch(`${base}/api/session`, {
         headers: { Cookie: cookie },
       });
-      assert.equal((await sessionResponse.json()).user.email, "nueva@utec.edu.pe");
+
+      assert.equal(
+        (await sessionResponse.json()).user.email,
+        "temporal0@utec.edu.pe",
+      );
       assert.equal((await fetch(`${base}/api/push/dispatch`)).status, 401);
       const catalogResponse = await fetch(`${base}/api/catalog`);
+
       assert.equal(catalogResponse.status, 200);
       assert.match(catalogResponse.headers.get("cache-control"), /s-maxage=30/);
       assert.equal((await catalogResponse.json()).offerings.length, 2);
       assert.equal((await fetch(`${base}/api/orders`)).status, 401);
-      assert.equal((await fetch(`${base}/api/orders?limit=0`, {
-        headers: { Cookie: cookie },
-      })).status, 400);
-      const consumerToken = "c".repeat(64);
-      await insertSession(consumerToken, consumers[0].id);
-      const ordersPageResponse = await fetch(`${base}/api/orders?limit=1&offset=0`, {
-        headers: { Cookie: `menuu_session=${consumerToken}` },
-      });
+      assert.equal(
+        (
+          await fetch(`${base}/api/orders?limit=0`, {
+            headers: { Cookie: cookie },
+          })
+        ).status,
+        400,
+      );
+      const ordersPageResponse = await fetch(
+        `${base}/api/orders?limit=1&offset=0`,
+        {
+          headers: { Cookie: `menuu_session=${consumerToken}` },
+        },
+      );
       const ordersPage = await ordersPageResponse.json();
+
       assert.equal(ordersPageResponse.status, 200);
       assert.equal(ordersPage.orders.length, 1);
       assert.ok(ordersPage.total >= 1);
+
+      const preUsers = [
+        ["pre@utec.edu.pe", "Estudiante PRE", "1234PRE5612345"],
+        ["prelargo@utec.edu.pe", "Estudiante PRE largo", "5678PRE90123456"],
+        ["preletras@utec.edu.pe", "Estudiante PRE letras", "20261PREEN01008"],
+      ];
+
+      for (const [email, name, studentCode] of preUsers)
+        await insertUser({
+          id: randomUUID(),
+          name,
+          email,
+          passwordHash: hashPassword("clave-segura"),
+          role: "consumer",
+          studentCode,
+          career: "Ciencia de la Computación",
+          birthDate: null,
+        });
+
+      const preToken = "d".repeat(64);
+      const preUser = (
+        await db.query("SELECT id FROM users WHERE email='pre@utec.edu.pe'")
+      ).rows[0];
+
+      await insertSession(preToken, preUser.id);
+
       const preRegistered = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -418,11 +539,8 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           career: "Ciencia de la Computación",
         }),
       });
-      assert.equal(preRegistered.status, 201);
-      assert.equal(
-        (await preRegistered.json()).user.studentCode,
-        "1234PRE5612345",
-      );
+
+      assert.equal(preRegistered.status, 403);
       const preLongRegistered = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -434,11 +552,8 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           career: "Ciencia de la Computación",
         }),
       });
-      assert.equal(preLongRegistered.status, 201);
-      assert.equal(
-        (await preLongRegistered.json()).user.studentCode,
-        "5678PRE90123456",
-      );
+
+      assert.equal(preLongRegistered.status, 403);
       const preLettersRegistered = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -450,16 +565,14 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           career: "Ciencia de la Computación",
         }),
       });
-      assert.equal(preLettersRegistered.status, 201);
-      assert.equal(
-        (await preLettersRegistered.json()).user.studentCode,
-        "20261PREEN01008",
-      );
+
+      assert.equal(preLettersRegistered.status, 403);
       const preUpdated = await fetch(`${base}/api/account/profile`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Cookie: preRegistered.headers.get("set-cookie").split(";")[0],
+          Cookie: `menuu_session=${preToken}; menuu_csrf=test-csrf`,
+          "X-CSRF-Token": "test-csrf",
         },
         body: JSON.stringify({
           name: "Estudiante PRE",
@@ -467,11 +580,26 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           career: "Ciencia de la Computación",
         }),
       });
+
       assert.equal(preUpdated.status, 200);
       assert.equal(
         (await preUpdated.json()).user.studentCode,
         "1234PRE56123456",
       );
+      const csrfRejected = await fetch(`${base}/api/account/profile`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `menuu_session=${preToken}; menuu_csrf=test-csrf`,
+        },
+        body: JSON.stringify({
+          name: "Sin CSRF",
+          studentCode: "1234PRE56123456",
+          career: "Ciencia de la Computación",
+        }),
+      });
+
+      assert.equal(csrfRejected.status, 403);
       const invalidPre = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -483,10 +611,9 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           career: "Ciencia de la Computación",
         }),
       });
-      assert.equal(invalidPre.status, 400);
-      const preUser = (
-        await db.query("SELECT id FROM users WHERE email='pre@utec.edu.pe'")
-      ).rows[0];
+
+      assert.equal(invalidPre.status, 403);
+
       await db.query(
         "INSERT INTO users(id,name,email,password_hash,role,kitchen_id) VALUES ('kitchen-actor','Cocina temporal','cocina@menuu.test','hash','kitchen','test-kitchen')",
       );
@@ -495,11 +622,13 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         [hashPassword("admin-test-password")],
       );
       const adminToken = "b".repeat(64);
+
       await insertSession(adminToken, "admin-actor");
-      const adminCookie = `menuu_session=${adminToken}`;
+      const adminCookie = `menuu_session=${adminToken}; menuu_csrf=test-csrf`;
       const adminHeaders = {
         Cookie: adminCookie,
         "Content-Type": "application/json",
+        "X-CSRF-Token": "test-csrf",
       };
       const adminLogin = await fetch(`${base}/api/auth/login`, {
         method: "POST",
@@ -510,6 +639,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           role: "admin",
         }),
       });
+
       assert.equal(adminLogin.status, 200);
       assert.equal((await adminLogin.json()).user.role, "admin");
       assert.equal((await fetch(`${base}/api/admin/data`)).status, 401);
@@ -546,16 +676,22 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       const allOffers = await fetch(`${base}/api/admin/data`, {
         headers: { Cookie: adminCookie },
       });
+
       assert.equal(allOffers.status, 200);
       const allAdminData = await allOffers.json();
+
       assert.deepEqual(
         new Set(allAdminData.offers.map((item) => item.kitchenId)),
         new Set(["test-kitchen", "second-kitchen"]),
       );
-      const adminPageResponse = await fetch(`${base}/api/admin/data?week=1&limit=1&offset=0`, {
-        headers: { Cookie: adminCookie },
-      });
+      const adminPageResponse = await fetch(
+        `${base}/api/admin/data?week=1&limit=1&offset=0`,
+        {
+          headers: { Cookie: adminCookie },
+        },
+      );
       const adminPage = await adminPageResponse.json();
+
       assert.equal(adminPageResponse.status, 200);
       assert.equal(adminPage.offers.length, 1);
       assert.ok(adminPage.totalOffers >= 2);
@@ -570,6 +706,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         `${base}/api/admin/offers/${secondOffer}/students?q=fresh%40`,
         { headers: { Cookie: adminCookie } },
       );
+
       assert.deepEqual((await beforeStudent.json()).students, []);
       const freshRegistration = await fetch(`${base}/api/auth/register`, {
         method: "POST",
@@ -582,7 +719,18 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           career: "Ciencia de la Computación",
         }),
       });
-      assert.equal(freshRegistration.status, 201);
+
+      assert.equal(freshRegistration.status, 403);
+      await insertUser({
+        id: randomUUID(),
+        name: "Estudiante reciente",
+        email: "fresh@utec.edu.pe",
+        passwordHash: hashPassword("clave-segura"),
+        role: "consumer",
+        studentCode: "900000003",
+        career: "Ciencia de la Computación",
+        birthDate: null,
+      });
       const freshUser = (
         await db.query("SELECT id FROM users WHERE email='fresh@utec.edu.pe'")
       ).rows[0];
@@ -591,6 +739,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         { headers: { Cookie: adminCookie } },
       );
       const candidatePage = await afterStudent.json();
+
       assert.equal(candidatePage.students[0].id, freshUser.id);
       assert.equal(candidatePage.total, 1);
       assert.equal(
@@ -604,6 +753,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         headers: adminHeaders,
         body: JSON.stringify({ offerId: secondOffer, capacity: 3 }),
       });
+
       assert.equal(changedCapacity.status, 200);
       assert.equal(
         (
@@ -623,6 +773,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           quantity: 1,
         }),
       });
+
       assert.equal(adminAdded.status, 201);
       const adminOrderId = (await adminAdded.json()).orderId;
       const secondAdminAdd = await fetch(`${base}/api/admin/reservations/add`, {
@@ -634,12 +785,14 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           quantity: 1,
         }),
       });
+
       assert.equal(secondAdminAdd.status, 201);
       const invalidCapacity = await fetch(`${base}/api/admin/offers/capacity`, {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({ offerId: secondOffer, capacity: 1 }),
       });
+
       assert.equal(invalidCapacity.status, 409);
       const adminDelivered = await fetch(
         `${base}/api/admin/reservations/update`,
@@ -660,9 +813,14 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           }),
         },
       );
+
       assert.equal(adminDelivered.status, 200);
       assert.equal(
-        (await db.query("SELECT delivered_at FROM orders WHERE id=$1", [adminOrderId])).rows[0].delivered_at,
+        (
+          await db.query("SELECT delivered_at FROM orders WHERE id=$1", [
+            adminOrderId,
+          ])
+        ).rows[0].delivered_at,
         "2024-01-02T18:05:00.000Z",
       );
       assert.equal(
@@ -680,6 +838,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         offerId,
         "pre@",
       );
+
       assert.equal(
         candidates.some((student) => student.id === preUser.id),
         true,
@@ -700,6 +859,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       const manualReservation = (
         await kitchenData("test-kitchen")
       ).reservations.find((item) => item.orderId === manual.orderId);
+
       assert.equal(
         manualReservation.bookingDeadlineAt,
         (
@@ -748,6 +908,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       const manualOrder = (await getOrders(preUser.id)).find(
         (order) => order.id === manual.orderId,
       );
+
       assert.equal(
         (await kitchenData("test-kitchen")).reservations.some(
           (item) =>
@@ -766,8 +927,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       assert.equal(manualOrder.fulfillmentStatus, "delivered");
       assert.equal(manualOrder.payment, "Efectivo");
       const ordinaryCreatedAt = (
-        await db.query("SELECT created_at FROM orders WHERE id=$1", [manual.orderId])
+        await db.query("SELECT created_at FROM orders WHERE id=$1", [
+          manual.orderId,
+        ])
       ).rows[0].created_at;
+
       await assert.rejects(
         updateKitchenReservation("test-kitchen", "kitchen-actor", {
           orderId: manual.orderId,
@@ -779,20 +943,30 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
         { status: 403 },
       );
-      await updateKitchenReservation("test-kitchen", "kitchen-actor", {
-        orderId: manual.orderId,
-        orderItemId: manual.orderItemId,
-        action: "deliver",
-        deliveredQuantity: 1,
-        paymentMethod: "Efectivo",
-        deliveredAt: "2024-01-02T13:05",
-      }, true);
+      await updateKitchenReservation(
+        "test-kitchen",
+        "kitchen-actor",
+        {
+          orderId: manual.orderId,
+          orderItemId: manual.orderItemId,
+          action: "deliver",
+          deliveredQuantity: 1,
+          paymentMethod: "Efectivo",
+          deliveredAt: "2024-01-02T13:05",
+        },
+        true,
+      );
       assert.deepEqual(
-        (await db.query(
-          'SELECT created_at AS "createdAt",delivered_at AS "deliveredAt" FROM orders WHERE id=$1',
-          [manual.orderId],
-        )).rows[0],
-        { createdAt: ordinaryCreatedAt, deliveredAt: "2024-01-02T18:05:00.000Z" },
+        (
+          await db.query(
+            'SELECT created_at AS "createdAt",delivered_at AS "deliveredAt" FROM orders WHERE id=$1',
+            [manual.orderId],
+          )
+        ).rows[0],
+        {
+          createdAt: ordinaryCreatedAt,
+          deliveredAt: "2024-01-02T18:05:00.000Z",
+        },
       );
       await assert.rejects(
         updateKitchenReservation("test-kitchen", "kitchen-actor", {
@@ -882,6 +1056,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           [offerId],
         )
       ).rows[0];
+
       assert.equal(releasedStock.reserved_count, 1);
       assert.equal(releasedStock.sold_out_at, null);
       const preLongUser = (
@@ -889,6 +1064,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           "SELECT id FROM users WHERE email='prelargo@utec.edu.pe'",
         )
       ).rows[0];
+
       await addKitchenReservation("test-kitchen", "kitchen-actor", {
         offerId,
         studentId: preLongUser.id,
@@ -932,10 +1108,15 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       const extraordinaryOrder = (await getOrders(consumers[1].id)).find(
         (order) => order.id === extraordinary.orderId,
       );
+
       assert.equal(extraordinary.extraordinary, true);
       assert.equal(extraordinaryOrder.fulfillmentStatus, "delivered");
       assert.equal(
-        (await db.query("SELECT delivered_at FROM orders WHERE id=$1", [extraordinary.orderId])).rows[0].delivered_at,
+        (
+          await db.query("SELECT delivered_at FROM orders WHERE id=$1", [
+            extraordinary.orderId,
+          ])
+        ).rows[0].delivered_at,
         extraordinaryOrder.createdAt,
       );
       assert.ok(
@@ -972,30 +1153,45 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         "manual_add",
       );
       await assert.rejects(
-        updateKitchenReservation("test-kitchen", "admin-actor", {
+        updateKitchenReservation(
+          "test-kitchen",
+          "admin-actor",
+          {
+            orderId: extraordinary.orderId,
+            orderItemId: extraordinary.orderItemId,
+            action: "deliver",
+            deliveredQuantity: 1,
+            paymentMethod: "Efectivo",
+            deliveredAt: "2020-01-01T13:09",
+          },
+          true,
+        ),
+        /no puede ser anterior al fin de recojo/,
+      );
+      await updateKitchenReservation(
+        "test-kitchen",
+        "admin-actor",
+        {
           orderId: extraordinary.orderId,
           orderItemId: extraordinary.orderItemId,
           action: "deliver",
           deliveredQuantity: 1,
           paymentMethod: "Efectivo",
-          deliveredAt: "2020-01-01T13:09",
-        }, true),
-        /no puede ser anterior al fin de recojo/,
+          deliveredAt: "2020-01-01T13:20",
+        },
+        true,
       );
-      await updateKitchenReservation("test-kitchen", "admin-actor", {
-        orderId: extraordinary.orderId,
-        orderItemId: extraordinary.orderItemId,
-        action: "deliver",
-        deliveredQuantity: 1,
-        paymentMethod: "Efectivo",
-        deliveredAt: "2020-01-01T13:20",
-      }, true);
       assert.deepEqual(
-        (await db.query(
-          'SELECT created_at AS "createdAt",delivered_at AS "deliveredAt" FROM orders WHERE id=$1',
-          [extraordinary.orderId],
-        )).rows[0],
-        { createdAt: "2020-01-01T18:20:00.000Z", deliveredAt: "2020-01-01T18:20:00.000Z" },
+        (
+          await db.query(
+            'SELECT created_at AS "createdAt",delivered_at AS "deliveredAt" FROM orders WHERE id=$1',
+            [extraordinary.orderId],
+          )
+        ).rows[0],
+        {
+          createdAt: "2020-01-01T18:20:00.000Z",
+          deliveredAt: "2020-01-01T18:20:00.000Z",
+        },
       );
       await assert.rejects(
         updateKitchenReservation("test-kitchen", "kitchen-actor", {
@@ -1054,6 +1250,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         "INSERT INTO order_items(order_id,offer_id,dish_name,quantity,unit_price_cents,total_cents) VALUES('expired-order','expired-offer','Plato',1,1100,1100)",
       );
       const afterPickup = await fetch(`${base}/api/bootstrap`);
+
       assert.equal(afterPickup.status, 200);
       assert.equal(
         (await getOrders(consumers[1].id)).find(
@@ -1092,11 +1289,13 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         action: "reset",
       });
       const kitchenToken = "a".repeat(64);
+
       await insertSession(kitchenToken, "kitchen-actor");
       const updatedKitchenCandidates = await fetch(
         `${base}/api/kitchen/offers/${offerId}/students?q=fresh%40`,
         { headers: { Cookie: `menuu_session=${kitchenToken}` } },
       );
+
       assert.equal(
         (await updatedKitchenCandidates.json()).students.some(
           (student) => student.id === freshUser.id,
@@ -1114,15 +1313,22 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       const kitchenAfterCorrection = await fetch(`${base}/api/kitchen/data`, {
         headers: { Cookie: `menuu_session=${kitchenToken}` },
       });
+
       assert.equal(kitchenAfterCorrection.status, 200);
-      const kitchenOperations = await fetch(`${base}/api/kitchen/data?scope=operations`, {
-        headers: { Cookie: `menuu_session=${kitchenToken}` },
-      });
+      const kitchenOperations = await fetch(
+        `${base}/api/kitchen/data?scope=operations`,
+        {
+          headers: { Cookie: `menuu_session=${kitchenToken}` },
+        },
+      );
+
       assert.equal(kitchenOperations.status, 200);
       const operations = await kitchenOperations.json();
+
       assert.equal(operations.analytics, null);
       assert.ok(operations.offers.some((item) => item.id === concurrentOffer));
       const afterCorrection = await fetch(`${base}/api/bootstrap`);
+
       assert.equal(afterCorrection.status, 200);
       assert.equal(
         (await getOrders(consumers[1].id)).find(

@@ -719,10 +719,21 @@ p {
   margin-top: 14px;
   color: var(--color-text);
 }
-.pickup-notifications > svg { flex: 0 0 auto; color: var(--color-brand); margin-top: 2px; }
-.pickup-notifications > div { min-width: 0; }
-.pickup-notifications strong { display: block; font-size: 14px; }
-.pickup-notifications p { margin: 3px 0 0; }
+.pickup-notifications > svg {
+  flex: 0 0 auto;
+  color: var(--color-brand);
+  margin-top: 2px;
+}
+.pickup-notifications > div {
+  min-width: 0;
+}
+.pickup-notifications strong {
+  display: block;
+  font-size: 14px;
+}
+.pickup-notifications p {
+  margin: 3px 0 0;
+}
 .pickup-notifications button {
   min-height: 44px;
   margin-top: 8px;
@@ -731,13 +742,25 @@ p {
   border-radius: 14px;
   background: var(--color-background);
   color: var(--color-brand);
-  font: 600 14px "DM Sans", sans-serif;
+  font:
+    600 14px "DM Sans",
+    sans-serif;
   cursor: pointer;
 }
-.pickup-notifications button:hover { border-color: var(--color-brand); }
-.pickup-notifications button:focus-visible { outline: 3px solid var(--color-orange-soft); outline-offset: 2px; }
-.pickup-notifications button:disabled { opacity: .55; cursor: wait; }
-.pickup-notifications .pickup-notifications-error { color: var(--color-error); }
+.pickup-notifications button:hover {
+  border-color: var(--color-brand);
+}
+.pickup-notifications button:focus-visible {
+  outline: 3px solid var(--color-orange-soft);
+  outline-offset: 2px;
+}
+.pickup-notifications button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.pickup-notifications .pickup-notifications-error {
+  color: var(--color-error);
+}
 .site-footer {
   border-top: 1px solid var(--color-border);
   background: var(--color-background);
@@ -2026,6 +2049,134 @@ p {
   flex-direction: column;
   gap: 16px;
 }
+.auth-google-wrapper {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding: 8px 0;
+}
+.auth-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--color-orange-soft);
+  color: var(--color-brand);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.auth-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-orange-display);
+}
+.auth-google-header {
+  display: grid;
+  gap: 6px;
+}
+.auth-google-title {
+  margin: 0;
+  color: var(--color-brand);
+  font: 600 24px/1.2 var(--font-display);
+}
+.auth-google-desc {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.auth-google-desc strong {
+  color: var(--color-text);
+}
+.auth-register-header {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+.auth-google-account-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 500;
+}
+.google-auth-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 20px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-field);
+  background: white;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgb(7 39 28 / 6%);
+  transition: all 0.2s ease;
+}
+.google-auth-button:hover:not(:disabled) {
+  background: #fbfbf9;
+  border-color: #cbd3c5;
+  box-shadow: 0 4px 12px rgb(7 39 28 / 10%);
+  transform: translateY(-1px);
+}
+.google-auth-button:active:not(:disabled) {
+  transform: translateY(0);
+  background: #f4f5f0;
+}
+.google-auth-button:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+.google-auth-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.auth-security-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-border);
+  border-radius: 14px;
+  background: #f8faf5;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.auth-security-notice svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--color-brand);
+}
+.auth-security-notice strong {
+  display: block;
+  color: var(--color-text);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.auth-security-notice p {
+  margin: 0;
+}
 .auth-layout-details .auth-card form {
   gap: 13px;
 }
@@ -2848,8 +2999,15 @@ p {
   outline: 2px solid var(--color-brand);
   outline-offset: 3px;
 }
-.order-cancel-confirm p { margin-bottom: 10px; font-size: 14px; }
-.order-cancel-confirm > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.order-cancel-confirm p {
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+.order-cancel-confirm > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .review-note,
 .review-saved {
   margin-top: 14px;

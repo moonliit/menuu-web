@@ -16,6 +16,7 @@ export async function migrate() {
     .sort()) {
     const sql = await readFile(join(directory, name), "utf8");
     const needsForeignKeysOff = sql.startsWith("-- @foreign-keys-off");
+
     if (
       needsForeignKeysOff &&
       (
@@ -30,6 +31,7 @@ export async function migrate() {
           (await getDb().query("PRAGMA foreign_keys")).rows[0].foreign_keys,
         )
       : null;
+
     if (needsForeignKeysOff) await getDb().query("PRAGMA foreign_keys=OFF");
     try {
       const applied = await transaction(async (db) => {
@@ -41,6 +43,7 @@ export async function migrate() {
           ).rowCount
         )
           return false;
+
         if (
           needsForeignKeysOff &&
           Number(
@@ -55,8 +58,10 @@ export async function migrate() {
           .map((value) => value.trim())
           .filter(Boolean))
           await db.query(statement);
+
         if (needsForeignKeysOff) {
           const invalid = await db.query("PRAGMA foreign_key_check");
+
           if (invalid.rows.length)
             throw new Error(
               `La migración ${name} dejaría referencias inválidas.`,

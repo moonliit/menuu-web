@@ -12,9 +12,10 @@ const tokenHash = (token) => createHash("sha256").update(token).digest("hex");
 const dishKey = (kitchenId, dishId) => `${kitchenId}:${dishId}`;
 
 async function loadDishes(client, selection = null) {
-  const filter = (alias) => selection
-    ? ` WHERE EXISTS (SELECT 1 FROM offers o WHERE o.kitchen_id=${alias}.kitchen_id AND o.dish_id=${alias}.${alias === "d" ? "id" : "dish_id"} AND ${selection.offerIds ? "o.id=ANY($1::text[])" : "o.offer_date >= $1 AND o.offer_date < date($1, '+14 days')"})`
-    : "";
+  const filter = (alias) =>
+    selection
+      ? ` WHERE EXISTS (SELECT 1 FROM offers o WHERE o.kitchen_id=${alias}.kitchen_id AND o.dish_id=${alias}.${alias === "d" ? "id" : "dish_id"} AND ${selection.offerIds ? "o.id=ANY($1::text[])" : "o.offer_date >= $1 AND o.offer_date < date($1, '+14 days')"})`
+      : "";
   const args = selection ? [selection.offerIds ?? selection.start] : [];
   const dishesResult = await client.query(
     `SELECT d.kitchen_id AS "kitchenId", d.id, d.name, d.description, d.price_cents AS "priceCents", d.image_url AS "imageUrl", d.image_alt AS "imageAlt", d.active FROM dishes d${filter("d")}`,
@@ -208,7 +209,7 @@ export async function getCatalog(now = new Date()) {
 
 export async function findUserByEmail(email) {
   const result = await getDb().query(
-    `SELECT u.id,u.name,u.email,u.role,u.kitchen_id AS "kitchenId",u.student_code AS "studentCode",u.career,u.birth_date AS "birthDate",u.password_hash AS "passwordHash",
+    `SELECT u.id,u.name,u.email,u.role,u.kitchen_id AS "kitchenId",u.student_code AS "studentCode",u.career,u.birth_date AS "birthDate",u.password_hash AS "passwordHash",u.google_sub AS "googleSub",
     NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='reservado' AND o.fulfillment_status='no_show') AS "bookingAllowed"
     FROM users u WHERE u.email=$1`,
     [email],
@@ -217,10 +218,28 @@ export async function findUserByEmail(email) {
   return result.rows[0] || null;
 }
 
+export async function findUserByGoogleSub(googleSub) {
+  const result = await getDb().query(
+    `SELECT u.id,u.name,u.email,u.role,u.kitchen_id AS "kitchenId",u.student_code AS "studentCode",u.career,u.birth_date AS "birthDate",u.password_hash AS "passwordHash",u.google_sub AS "googleSub",
+    NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='reservado' AND o.fulfillment_status='no_show') AS "bookingAllowed"
+    FROM users u WHERE u.google_sub=$1`,
+    [googleSub],
+  );
+
+  return result.rows[0] || null;
+}
+
+export async function linkGoogleSub(userId, googleSub) {
+  await getDb().query(
+    "UPDATE users SET google_sub=$2 WHERE id=$1 AND google_sub IS NULL",
+    [userId, googleSub],
+  );
+}
+
 export async function insertUser(user) {
   const result = await getDb().query(
-    `INSERT INTO users (id,name,email,password_hash,role,student_code,career,birth_date)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `INSERT INTO users (id,name,email,password_hash,role,student_code,career,birth_date,google_sub)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
     RETURNING id,name,email,role,kitchen_id AS "kitchenId",student_code AS "studentCode",career,
       birth_date AS "birthDate",1 AS "bookingAllowed"`,
     [
@@ -232,6 +251,7 @@ export async function insertUser(user) {
       user.studentCode,
       user.career,
       user.birthDate || null,
+      user.googleSub || null,
     ],
   );
 
@@ -286,12 +306,15 @@ export async function cancelOrder(userId, orderId) {
     const order = (await db.query(
       `SELECT id,kitchen_id AS "kitchenId",payment_checkout_id AS "paymentCheckoutId",offer_date AS date,delivery_time AS "deliveryTime",status,
        fulfillment_status AS "fulfillmentStatus" FROM orders WHERE id=$1 AND user_id=$2`,
-      [orderId, userId],
-    )).rows[0];
+        [orderId, userId],
+      )
+    ).rows[0];
+
     if (!order) throw invalid("Reserva no encontrada.", 404);
     if (order.paymentCheckoutId) throw invalid("Para cancelar una reserva con Yape, contacta a Menúu para coordinar la devolución.", 409);
     if (order.status !== "reservado" || order.fulfillmentStatus !== "pending")
       throw invalid("Esta reserva ya no se puede cancelar.", 409);
+
     if (deliveryMoment(order.date, order.deliveryTime).getTime() <= Date.now())
       throw invalid("La hora de recojo ya comenzó. Contacta a la cocina.", 409);
     const changed = await db.query(
@@ -299,8 +322,11 @@ export async function cancelOrder(userId, orderId) {
        WHERE id=$1 AND user_id=$2 AND status='reservado' AND fulfillment_status='pending' RETURNING id`,
       [orderId, userId, new Date().toISOString()],
     );
-    if (!changed.rowCount) throw invalid("Esta reserva ya no se puede cancelar.", 409);
+
+    if (!changed.rowCount)
+      throw invalid("Esta reserva ya no se puede cancelar.", 409);
     await releaseOrderCapacity(db, orderId, order.kitchenId);
+
     return { ok: true };
   });
 }
@@ -395,8 +421,11 @@ export async function getOrders(userId, page = null) {
 export async function getOrdersPage(userId, { limit = 10, offset = 0 } = {}) {
   const [orders, count] = await Promise.all([
     getOrders(userId, { limit, offset }),
-    getDb().query("SELECT count(*) AS total FROM orders WHERE user_id=$1", [userId]),
+    getDb().query("SELECT count(*) AS total FROM orders WHERE user_id=$1", [
+      userId,
+    ]),
   ]);
+
   return { orders, total: Number(count.rows[0].total), limit, offset };
 }
 

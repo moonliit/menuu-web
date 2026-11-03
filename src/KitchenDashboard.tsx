@@ -177,9 +177,14 @@ type Data = {
     totalOrders: number;
   };
 };
-type KitchenPayload = Omit<Data, "analytics"> & { analytics: Data["analytics"] | null };
+type KitchenPayload = Omit<Data, "analytics"> & {
+  analytics: Data["analytics"] | null;
+};
 const emptyAnalytics: Data["analytics"] = {
-  offers: [], bookingHours: [], bookingTimeline: [], totalOrders: 0,
+  offers: [],
+  bookingHours: [],
+  bookingTimeline: [],
+  totalOrders: 0,
 };
 export type KitchenSection =
   "inicio" | "menu" | "platos" | "estadisticas" | "cuenta";
@@ -265,13 +270,15 @@ const duration = (start: string | null, end: string) => {
 };
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
+  const csrf = document.cookie.split(";").map((part) => part.trim())
+    .find((part) => part.startsWith("menuu_csrf="))?.slice("menuu_csrf=".length);
   const response = await fetch(
     path,
     body === undefined
       ? undefined
       : {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...(csrf ? { "X-CSRF-Token": csrf } : {}) },
           body: JSON.stringify(body),
         },
   );
@@ -283,9 +290,11 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
 async function upload(file: File, scope: "profile" | "dish") {
   if (!["image/png", "image/jpeg"].includes(file.type))
     throw new Error("Elige una foto PNG o JPG.");
+  const csrf = document.cookie.split(";").map((part) => part.trim())
+    .find((part) => part.startsWith("menuu_csrf="))?.slice("menuu_csrf=".length);
   const response = await fetch(
     `/api/kitchen/photo${scope === "dish" ? "?scope=dish" : ""}`,
-    { method: "POST", headers: { "Content-Type": file.type }, body: file },
+    { method: "POST", headers: { "Content-Type": file.type, ...(csrf ? { "X-CSRF-Token": csrf } : {}) }, body: file },
   );
   const result = (await response.json()) as { url?: string; error?: string };
   if (!response.ok || !result.url)
@@ -917,7 +926,10 @@ function KitchenReservationPanel({
     const timer = window.setTimeout(async () => {
       setLoadingStudents(true);
       try {
-        const result = await request<{ students: typeof students; total: number }>(
+        const result = await request<{
+          students: typeof students;
+          total: number;
+        }>(
           `${apiPrefix}/offers/${offer.id}/students?q=${encodeURIComponent(search.trim())}&limit=20&offset=${studentPage * 20}`,
         );
         if (active) {
@@ -1207,7 +1219,8 @@ function KitchenReservationPanel({
                       item.fulfillmentStatus === "delivered" &&
                       item.status === "reservado" && (
                         <small className="km-delivery-time">
-                          Entrega: {item.deliveredAt
+                          Entrega:{" "}
+                          {item.deliveredAt
                             ? deliveredAtLabel(item.deliveredAt)
                             : "sin fecha registrada"}
                         </small>
@@ -1407,14 +1420,31 @@ function KitchenReservationPanel({
               )}
             </div>
             {studentTotal > 20 && (
-              <nav className="km-candidate-pages" aria-label="Páginas de estudiantes">
-                <Button type="button" variant="secondary"
+              <nav
+                className="km-candidate-pages"
+                aria-label="Páginas de estudiantes"
+              >
+                <Button
+                  type="button"
+                  variant="secondary"
                   disabled={studentPage === 0 || loadingStudents}
-                  onClick={() => setStudentPage((page) => page - 1)}>Anterior</Button>
-                <span>{studentPage + 1} de {Math.ceil(studentTotal / 20)}</span>
-                <Button type="button" variant="secondary"
-                  disabled={(studentPage + 1) * 20 >= studentTotal || loadingStudents}
-                  onClick={() => setStudentPage((page) => page + 1)}>Siguiente</Button>
+                  onClick={() => setStudentPage((page) => page - 1)}
+                >
+                  Anterior
+                </Button>
+                <span>
+                  {studentPage + 1} de {Math.ceil(studentTotal / 20)}
+                </span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={
+                    (studentPage + 1) * 20 >= studentTotal || loadingStudents
+                  }
+                  onClick={() => setStudentPage((page) => page + 1)}
+                >
+                  Siguiente
+                </Button>
               </nav>
             )}
           </>
@@ -1532,8 +1562,7 @@ function KitchenReservationPanel({
               (apiPrefix === "/api/admin" &&
                 (!promptDeliveredAt ||
                   (paymentPrompt?.extraordinary &&
-                    promptDeliveredAt <
-                      `${offer.date}T${offer.pickupUntil}`)))
+                    promptDeliveredAt < `${offer.date}T${offer.pickupUntil}`)))
             }
           >
             {busyOrder ? "Guardando…" : "Guardar entrega"}
@@ -2254,12 +2283,16 @@ export default function KitchenDashboard({
     const scope = section === "estadisticas" ? "full" : "operations";
     const next = await cachedRequest(
       `kitchen:data:${user.kitchenId}:${scope}`,
-      () => request<KitchenPayload>(
-        `/api/kitchen/data${scope === "operations" ? "?scope=operations" : ""}`),
-      45_000, force,
+      () =>
+        request<KitchenPayload>(
+          `/api/kitchen/data${scope === "operations" ? "?scope=operations" : ""}`,
+        ),
+      45_000,
+      force,
     );
     setData((current) => ({
-      ...next, analytics: next.analytics ?? current?.analytics ?? emptyAnalytics,
+      ...next,
+      analytics: next.analytics ?? current?.analytics ?? emptyAnalytics,
     }));
   };
   useEffect(() => {
@@ -2273,11 +2306,18 @@ export default function KitchenDashboard({
     if (section !== "inicio" && section !== "menu") return;
     const update = () => {
       if (!document.hidden)
-        cachedRequest(`kitchen:data:${user.kitchenId}:operations`,
-          () => request<KitchenPayload>("/api/kitchen/data?scope=operations"), 45_000, true)
-          .then((next) => setData((current) => ({
-            ...next, analytics: current?.analytics ?? emptyAnalytics,
-          })))
+        cachedRequest(
+          `kitchen:data:${user.kitchenId}:operations`,
+          () => request<KitchenPayload>("/api/kitchen/data?scope=operations"),
+          45_000,
+          true,
+        )
+          .then((next) =>
+            setData((current) => ({
+              ...next,
+              analytics: current?.analytics ?? emptyAnalytics,
+            })),
+          )
           .catch(() => {});
     };
     const timer = window.setInterval(update, 45_000);
@@ -3388,7 +3428,8 @@ export function AdminDashboard({
             </Button>
           </div>
           <p className="admin-summary">
-            {data.totalOffers} {data.totalOffers === 1 ? "menú" : "menús"} en esta selección ·{" "}
+            {data.totalOffers} {data.totalOffers === 1 ? "menú" : "menús"} en
+            esta selección ·{" "}
             {visible.reduce(
               (sum, offer) =>
                 sum +
@@ -3425,13 +3466,35 @@ export function AdminDashboard({
             </p>
           )}
           {data.totalOffers > 10 && (
-            <nav className="km-pagination" aria-label="Páginas de menús en Admin">
-              <Button type="button" variant="secondary" disabled={adminPage === 0}
-                onClick={() => { setAdminPage((page) => page - 1); setExpanded(null); }}>Anterior</Button>
-              <span>Página {adminPage + 1} de {Math.ceil(data.totalOffers / 10)}</span>
-              <Button type="button" variant="secondary"
+            <nav
+              className="km-pagination"
+              aria-label="Páginas de menús en Admin"
+            >
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={adminPage === 0}
+                onClick={() => {
+                  setAdminPage((page) => page - 1);
+                  setExpanded(null);
+                }}
+              >
+                Anterior
+              </Button>
+              <span>
+                Página {adminPage + 1} de {Math.ceil(data.totalOffers / 10)}
+              </span>
+              <Button
+                type="button"
+                variant="secondary"
                 disabled={(adminPage + 1) * 10 >= data.totalOffers}
-                onClick={() => { setAdminPage((page) => page + 1); setExpanded(null); }}>Siguiente</Button>
+                onClick={() => {
+                  setAdminPage((page) => page + 1);
+                  setExpanded(null);
+                }}
+              >
+                Siguiente
+              </Button>
             </nav>
           )}
         </div>

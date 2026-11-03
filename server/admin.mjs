@@ -6,9 +6,19 @@ const fail = (message, status = 400) => {
   throw Object.assign(new Error(message), { status });
 };
 
-export async function adminData({ week = null, kitchen = "all", limit = 20, offset = 0 } = {}) {
+export async function adminData({
+  week = null,
+  kitchen = "all",
+  limit = 20,
+  offset = 0,
+} = {}) {
   const start = weekStart();
-  const from = week === null ? start : new Date(Date.parse(`${start}T12:00:00Z`) + week * 7 * 86400_000).toISOString().slice(0, 10);
+  const from =
+    week === null
+      ? start
+      : new Date(Date.parse(`${start}T12:00:00Z`) + week * 7 * 86400_000)
+          .toISOString()
+          .slice(0, 10);
   const days = week === null ? 14 : 7;
   const filter = `o.offer_date >= $1 AND o.offer_date < date($1, '+${days} days') AND ($2='all' OR o.kitchen_id=$2)`;
   const [offers, count, kitchens] = await Promise.all([
@@ -24,10 +34,10 @@ export async function adminData({ week = null, kitchen = "all", limit = 20, offs
        ORDER BY o.offer_date,o.delivery_time,k.name,d.name,o.id LIMIT $3 OFFSET $4`,
       [from, kitchen, limit, offset],
     ),
-    getDb().query(
-      `SELECT count(*) AS total FROM offers o WHERE ${filter}`,
-      [from, kitchen],
-    ),
+    getDb().query(`SELECT count(*) AS total FROM offers o WHERE ${filter}`, [
+      from,
+      kitchen,
+    ]),
     getDb().query(
       `SELECT DISTINCT k.id,k.name FROM kitchens k JOIN offers o ON o.kitchen_id=k.id
        WHERE o.offer_date >= $1 AND o.offer_date < date($1, '+14 days') ORDER BY k.name`,
@@ -49,8 +59,10 @@ export async function adminData({ week = null, kitchen = "all", limit = 20, offs
        JOIN users u ON u.id=r.user_id JOIN offers o ON o.id=i.offer_id
        WHERE i.offer_id=ANY($1::text[])
        ORDER BY o.offer_date,o.delivery_time,u.name,r.created_at`,
-      [offerIds],
-    ) : { rows: [] };
+        [offerIds],
+      )
+    : { rows: [] };
+
   return {
     offers: offers.rows,
     reservations: reservations.rows,
@@ -69,7 +81,9 @@ export async function adminOfferKitchen(offerId) {
      WHERE id=$1 AND offer_date >= $2 AND offer_date < date($2, '+14 days')`,
     [offerId, start],
   );
+
   if (!result.rowCount) fail("Menú no encontrado en estas dos semanas.", 404);
+
   return result.rows[0].kitchenId;
 }
 
@@ -82,13 +96,16 @@ export async function adminOrderKitchen(orderId) {
      LIMIT 1`,
     [orderId, start],
   );
+
   if (!result.rowCount) fail("Pedido no encontrado en estas dos semanas.", 404);
+
   return result.rows[0].kitchenId;
 }
 
 export async function updateAdminCapacity(actorId, data) {
   const offerId = typeof data?.offerId === "string" ? data.offerId : "";
   const capacity = Number(data?.capacity);
+
   if (
     !offerId ||
     !Number.isInteger(capacity) ||
@@ -97,6 +114,7 @@ export async function updateAdminCapacity(actorId, data) {
   )
     fail("Indica un cupo válido entre 1 y 10000.");
   const start = weekStart();
+
   return transaction(async (db) => {
     const offer = (
       await db.query(
@@ -105,9 +123,12 @@ export async function updateAdminCapacity(actorId, data) {
         [offerId, start],
       )
     ).rows[0];
+
     if (!offer) fail("Menú no encontrado en estas dos semanas.", 404);
+
     if (capacity < offer.reservedCount)
       fail("El cupo no puede ser menor que las porciones reservadas.", 409);
+
     if (capacity === offer.capacity) return { ok: true };
     await db.query(
       `UPDATE offers SET capacity=$2,
@@ -120,6 +141,7 @@ export async function updateAdminCapacity(actorId, data) {
        VALUES($1,$2,$3,$4,$5)`,
       [randomUUID(), offerId, actorId, offer.capacity, capacity],
     );
+
     return { ok: true };
   });
 }

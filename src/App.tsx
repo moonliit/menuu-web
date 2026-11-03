@@ -1,4 +1,4 @@
-﻿import {
+import {
   useEffect,
   useMemo,
   useRef,
@@ -19,19 +19,24 @@ import {
   Search,
   SlidersHorizontal,
   Star,
+  ShieldCheck,
   UtensilsCrossed,
   UserRound,
   X,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { Button, EmptyState, SearchField } from "./components/ui";
-import { disablePickupNotifications, PickupNotifications } from "./components/PickupNotifications";
+import {
+  disablePickupNotifications,
+  PickupNotifications,
+} from "./components/PickupNotifications";
 import {
   BrandAccountIcon,
   BrandCalendarIcon,
   BrandCartIcon,
   BrandClockIcon,
   BrandDishIcon,
+  BrandGoogleIcon,
   BrandLocationIcon,
   BrandLockedOrdersIcon,
   BrandLogoutIcon,
@@ -69,7 +74,12 @@ import { InstallPrompt } from "./components/InstallPrompt";
 import { cachedRequest, cachedValue, invalidateCache } from "./data/queryCache";
 
 type SessionData = Pick<Bootstrap, "user" | "careers">;
-type OrdersPage = { orders: Order[]; total: number; limit: number; offset: number };
+type OrdersPage = {
+  orders: Order[];
+  total: number;
+  limit: number;
+  offset: number;
+};
 
 type Page =
   | "inicio"
@@ -271,7 +281,10 @@ const emptyCatalog = (): Bootstrap["catalog"] => {
   const today = limaToday();
   const start = weekDate(today, -(limaDayIndex() ?? 6));
   return {
-    kitchens: [], offerings: [], sales: [], weeklyDishSales: [],
+    kitchens: [],
+    offerings: [],
+    sales: [],
+    weeklyDishSales: [],
     weeks: [start, weekDate(start, 7)],
   };
 };
@@ -290,13 +303,21 @@ const offerPrice = (offer: Offering, choices: SelectedChoices) =>
   );
 
 async function api<T>(path: string, data?: unknown): Promise<T> {
+  const csrf = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith("menuu_csrf="))
+    ?.slice("menuu_csrf=".length);
   const response = await fetch(
     path,
     data === undefined
       ? undefined
       : {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+          },
           body: JSON.stringify(data),
         },
   );
@@ -704,105 +725,155 @@ function CareerPicker({
 }
 
 function AuthPanel({
-  careers,
+  careers = [],
   message,
   onAuthenticated,
 }: {
-  careers: string[];
+  careers?: string[];
   message: string;
   onAuthenticated: () => Promise<void>;
 }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [registerStep, setRegisterStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<"google" | "register">("google");
+  const [googleEmail, setGoogleEmail] = useState("");
+  const [googleCredential, setGoogleCredential] = useState("");
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [career, setCareer] = useState("");
-  const [password, setPassword] = useState("");
   const [birthDate, setBirthDate] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [passwordWarning, setPasswordWarning] = useState(false);
   const [careerInvalid, setCareerInvalid] = useState(false);
   const careerTriggerRef = useRef<HTMLButtonElement>(null);
-  const emailRef = useRef<HTMLInputElement>(null);
-  const passwordRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const googleButtonRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    if (mode !== "register") return;
-    (registerStep === 1 ? emailRef : nameRef).current?.focus();
-  }, [mode, registerStep]);
-  function invalid(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const field = event.target as HTMLInputElement;
-    if (field !== event.currentTarget.querySelector("input:invalid")) return;
-    setError(
-      field === emailRef.current
-        ? field.validity.valueMissing
-          ? "Ingresa tu correo institucional."
-          : "Usa un correo @utec.edu.pe."
-        : field === passwordRef.current
-          ? "Ingresa tu contraseña."
-          : field === nameRef.current
-            ? "Escribe tu nombre completo."
-            : field.name === "studentCode"
-              ? studentCodeHelp
-              : "Revisa este campo.",
-    );
-  }
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (mode === "register" && registerStep === 1) {
-      if (password.length < 5) {
-        setPasswordWarning(true);
-        passwordRef.current?.focus();
-        return;
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) return;
+
+    const scriptId = "google-jssdk";
+    const initGsi = () => {
+      const g = (
+        window as unknown as {
+          google?: {
+            accounts?: {
+              id?: {
+                initialize: (config: unknown) => void;
+                renderButton: (element: HTMLElement, options: unknown) => void;
+              };
+            };
+          };
+        }
+      ).google;
+      if (g?.accounts?.id) {
+        g.accounts.id.initialize({
+          client_id: clientId,
+          callback: async (response: { credential?: string }) => {
+            if (response.credential) {
+              await authenticateWithGoogle({ credential: response.credential });
+            }
+          },
+          hosted_domain: "utec.edu.pe",
+          ux_mode: "popup",
+        });
+        if (googleButtonRef.current) {
+          g.accounts.id.renderButton(googleButtonRef.current, {
+            theme: "outline",
+            size: "large",
+            text: "continue_with",
+            shape: "rectangular",
+            width: 320,
+          });
+        }
       }
-      setPasswordWarning(false);
-      setRegisterStep(2);
-      setError("");
-      return;
+    };
+
+    if (!document.getElementById(scriptId)) {
+      const script = document.createElement("script");
+      script.id = scriptId;
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = initGsi;
+      document.body.appendChild(script);
+    } else {
+      initGsi();
     }
-    if (mode === "register" && !career) {
-      setCareerInvalid(true);
-      setError("Selecciona tu carrera.");
-      careerTriggerRef.current?.focus();
-      return;
+  }, []);
+
+  useEffect(() => {
+    if (step === "register") {
+      nameRef.current?.focus();
     }
+  }, [step]);
+
+  async function authenticateWithGoogle(payload: {
+    credential?: string;
+    email?: string;
+    name?: string;
+    studentCode?: string;
+    career?: string;
+    birthDate?: string | null;
+  }) {
     setBusy(true);
     setError("");
     try {
-      await api(
-        mode === "login" ? "/api/auth/login" : "/api/auth/register",
-        mode === "login"
-          ? { email, password, role: "consumer" }
-          : {
-              name,
-              email,
-              password,
-              birthDate: birthDate || null,
-              studentCode,
-              career,
-            },
-      );
-      await onAuthenticated();
+      const res = await api<{
+        status: "authenticated" | "needs_registration";
+        email?: string;
+        name?: string;
+        user?: User;
+      }>("/api/auth/google", payload);
+
+      if (res.status === "needs_registration") {
+        if (!payload.credential) {
+          throw new Error("No recibimos una credencial válida de Google.");
+        }
+        setGoogleCredential(payload.credential);
+        setGoogleEmail(res.email || payload.email || "");
+        setName(res.name || payload.name || "");
+        setStep("register");
+      } else {
+        await onAuthenticated();
+      }
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "No pudimos continuar.",
+        cause instanceof Error
+          ? cause.message
+          : "No pudimos acceder con Google.",
       );
     } finally {
       setBusy(false);
     }
   }
-  const stepTitles = ["Tu acceso", "Tus datos UTEC"];
+
+  async function handleRegisterSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!career) {
+      setCareerInvalid(true);
+      setError("Selecciona tu carrera.");
+      careerTriggerRef.current?.focus();
+      return;
+    }
+    await authenticateWithGoogle({
+      credential: googleCredential,
+      name: name.trim(),
+      studentCode: studentCode.trim(),
+      career,
+      birthDate: birthDate || null,
+    });
+  }
+
   return (
     <div
-      className={`auth-layout${mode === "register" && registerStep === 2 ? " auth-layout-details" : ""}`}
+      className={`auth-layout${step === "register" ? " auth-layout-details" : ""}`}
     >
       <div className="auth-side">
         <div className="page-heading">
-          <span className="eyebrow">TU ESPACIO</span>
-          <h1>Mi cuenta</h1>
+          <span className="eyebrow">
+            {step === "register" ? "COMPLETA TU REGISTRO" : "TU ESPACIO"}
+          </span>
+          <h1>{step === "register" ? "Tus datos UTEC" : "Mi cuenta"}</h1>
         </div>
         {message && (
           <p className="auth-message" role="status">
@@ -811,188 +882,136 @@ function AuthPanel({
         )}
       </div>
       <div className="auth-card">
-        <div className="auth-tabs" role="tablist" aria-label="Acceso">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "login"}
-            className={mode === "login" ? "active" : ""}
-            onClick={() => {
-              setMode("login");
-              setRegisterStep(1);
-              setError("");
-              setPasswordWarning(false);
-              setCareerInvalid(false);
-            }}
-          >
-            Iniciar sesión
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "register"}
-            className={mode === "register" ? "active" : ""}
-            onClick={() => {
-              setMode("register");
-              setRegisterStep(1);
-              setError("");
-              setPasswordWarning(false);
-              setCareerInvalid(false);
-            }}
-          >
-            Crear cuenta
-          </button>
-        </div>
-        {mode === "register" && (
-          <span className="visually-hidden" aria-live="polite">
-            Paso {registerStep} de 2: {stepTitles[registerStep - 1]}
-          </span>
-        )}
-        <form onSubmit={submit} onInvalidCapture={invalid}>
-          {(mode === "login" || registerStep === 1) && (
-            <>
-              <label>
-                Correo UTEC
-                <input
-                  ref={emailRef}
-                  type="email"
-                  autoComplete="email"
-                  required
-                  pattern="[^\s@]+@utec\.edu\.pe"
-                  title="Usa un correo @utec.edu.pe"
-                  value={email}
-                  onChange={(event) => {
-                    setEmail(event.target.value);
-                    setError("");
-                  }}
-                  placeholder="tu.nombre@utec.edu.pe"
-                />
-              </label>
-              <label>
-                Contraseña
-                <input
-                  ref={passwordRef}
-                  type="password"
-                  autoComplete={
-                    mode === "login" ? "current-password" : "new-password"
-                  }
-                  maxLength={128}
-                  required={mode === "login"}
-                  aria-required={mode === "register" || undefined}
-                  aria-invalid={
-                    (mode === "register" && passwordWarning) || undefined
-                  }
-                  value={password}
-                  onChange={(event) => {
-                    setPassword(event.target.value);
-                    setPasswordWarning(false);
-                    setError("");
-                  }}
-                  placeholder={
-                    mode === "register"
-                      ? "Mínimo 5 caracteres"
-                      : "Tu contraseña"
-                  }
-                />
-              </label>
-            </>
-          )}
-          {mode === "register" && registerStep === 2 && (
-            <div className="auth-details-fields">
-              <label>
-                Nombre completo
-                <input
-                  ref={nameRef}
-                  type="text"
-                  autoComplete="name"
-                  minLength={2}
-                  maxLength={80}
-                  required
-                  value={name}
-                  onChange={(event) => {
-                    setName(event.target.value);
-                    setError("");
-                  }}
-                  placeholder="¿Cómo te llamas?"
-                />
-              </label>
-              <label>
-                Código de estudiante
-                <input
-                  name="studentCode"
-                  type="text"
-                  inputMode="text"
-                  autoCapitalize="characters"
-                  autoComplete="off"
-                  minLength={9}
-                  maxLength={15}
-                  pattern="(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})"
-                  title={studentCodeHelp}
-                  required
-                  value={studentCode}
-                  onChange={(event) => {
-                    setStudentCode(
-                      event.target.value
-                        .toUpperCase()
-                        .replace(/[^0-9A-Z]/g, ""),
-                    );
-                    setError("");
-                  }}
-                  placeholder="9 dígitos o PRE"
-                  spellCheck={false}
-                />
-              </label>
-              <CareerPicker
-                careers={careers}
-                value={career}
-                onChange={(choice) => {
-                  setCareer(choice);
-                  setCareerInvalid(false);
-                  setError("");
-                }}
-                invalid={careerInvalid}
-                triggerRef={careerTriggerRef}
-              />
-              <BirthDatePicker
-                value={birthDate}
-                onChange={setBirthDate}
-                maxDate={limaToday()}
-              />
+        {step === "google" ? (
+          <div className="auth-google-wrapper">
+            <div className="auth-card-badge">
+              <span className="auth-badge-dot" />
+              <span>Acceso institucional UTEC</span>
             </div>
-          )}
-          <div className="auth-actions">
-            {mode === "register" && registerStep === 2 && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  setRegisterStep(1);
-                  setCareerInvalid(false);
-                  setError("");
-                }}
-              >
-                Volver
-              </Button>
-            )}
-            <Button type="submit" disabled={busy}>
-              <span>
-                {busy
-                  ? "Un momento…"
-                  : mode === "login"
-                    ? "Entrar a Menúu"
-                    : registerStep === 2
-                      ? "Crear mi cuenta"
-                      : "Continuar"}
-              </span>
-              {mode === "register" && registerStep === 1 && !busy && (
-                <span className="auth-button-step" aria-label="Paso 1 de 2">
-                  1/2
-                </span>
-              )}
-              <ArrowRight size={18} aria-hidden="true" />
-            </Button>
+
+            <div className="auth-google-header">
+              <h2 className="auth-google-title">Acceso único con Google</h2>
+              <p className="auth-google-desc">
+                Ingresa con tu cuenta de Google <strong>@utec.edu.pe</strong>{" "}
+                para acceder a Menúu.
+              </p>
+            </div>
+
+            <div
+              ref={googleButtonRef}
+              className="google-auth-button"
+              aria-busy={busy}
+            />
+
+            <div className="auth-security-notice">
+              <ShieldCheck size={20} aria-hidden="true" />
+              <div>
+                <strong>Acceso exclusivo para la comunidad UTEC.</strong>
+                <p>
+                  Si ya tienes una cuenta registrada entrarás de inmediato; de
+                  lo contrario, completarás tus datos de estudiante para
+                  crearla.
+                </p>
+              </div>
+            </div>
           </div>
-        </form>
+        ) : (
+          <div className="auth-register-wrapper">
+            <div className="auth-register-header">
+              <div className="auth-google-account-badge">
+                <BrandGoogleIcon size={16} />
+                <span>{googleEmail}</span>
+              </div>
+              <p className="auth-google-desc">
+                Tu cuenta Google está verificada. Completa tus datos de
+                estudiante para finalizar tu registro.
+              </p>
+            </div>
+
+            <form onSubmit={handleRegisterSubmit}>
+              <div className="auth-details-fields">
+                <label>
+                  Nombre completo
+                  <input
+                    ref={nameRef}
+                    type="text"
+                    autoComplete="name"
+                    minLength={2}
+                    maxLength={80}
+                    required
+                    value={name}
+                    onChange={(event) => {
+                      setName(event.target.value);
+                      setError("");
+                    }}
+                    placeholder="¿Cómo te llamas?"
+                  />
+                </label>
+                <label>
+                  Código de estudiante
+                  <input
+                    name="studentCode"
+                    type="text"
+                    inputMode="text"
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    minLength={9}
+                    maxLength={15}
+                    pattern="(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})"
+                    title={studentCodeHelp}
+                    required
+                    value={studentCode}
+                    onChange={(event) => {
+                      setStudentCode(
+                        event.target.value
+                          .toUpperCase()
+                          .replace(/[^0-9A-Z]/g, ""),
+                      );
+                      setError("");
+                    }}
+                    placeholder="9 dígitos o PRE"
+                    spellCheck={false}
+                  />
+                </label>
+                <CareerPicker
+                  careers={careers}
+                  value={career}
+                  onChange={(choice) => {
+                    setCareer(choice);
+                    setCareerInvalid(false);
+                    setError("");
+                  }}
+                  invalid={careerInvalid}
+                  triggerRef={careerTriggerRef}
+                />
+                <BirthDatePicker
+                  value={birthDate}
+                  onChange={setBirthDate}
+                  maxDate={limaToday()}
+                />
+              </div>
+
+              <div className="auth-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setStep("google");
+                    setError("");
+                    setCareerInvalid(false);
+                  }}
+                  disabled={busy}
+                >
+                  Volver
+                </Button>
+                <Button type="submit" disabled={busy}>
+                  <span>{busy ? "Creando cuenta…" : "Crear mi cuenta"}</span>
+                  <ArrowRight size={18} aria-hidden="true" />
+                </Button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
       <div className="auth-role-link">
         <span>¿Tienes una cocina?</span>
@@ -1010,19 +1029,8 @@ function AuthPanel({
         />
         <figcaption>Imagen referencial</figcaption>
       </figure>
-      {(passwordWarning || error) && (
-        <AuthErrorToast
-          message={
-            passwordWarning
-              ? "La contraseña debe tener al menos 5 caracteres."
-              : error
-          }
-          onClose={() => {
-            setPasswordWarning(false);
-            setError("");
-          }}
-        />
-      )}
+
+      {error && <AuthErrorToast message={error} onClose={() => setError("")} />}
     </div>
   );
 }
@@ -1585,19 +1593,40 @@ export default function App() {
 
   async function refresh(force = true) {
     const session = await cachedRequest(
-      "session", () => api<SessionData>("/api/session"), 300_000, force);
-    const needsCatalog = ![
-      "cuenta", "pedidos", "cocina", "cocinaInicio", "cocinaMenu",
-      "cocinaPlatos", "cocinaEstadisticas", "cocinaCuenta", "admin", "adminPedidos",
-    ].includes(page) && session.user?.role !== "kitchen" && session.user?.role !== "admin";
+      "session",
+      () => api<SessionData>("/api/session"),
+      300_000,
+      force,
+    );
+    const needsCatalog =
+      ![
+        "cuenta",
+        "pedidos",
+        "cocina",
+        "cocinaInicio",
+        "cocinaMenu",
+        "cocinaPlatos",
+        "cocinaEstadisticas",
+        "cocinaCuenta",
+        "admin",
+        "adminPedidos",
+      ].includes(page) &&
+      session.user?.role !== "kitchen" &&
+      session.user?.role !== "admin";
     const catalog = needsCatalog
-      ? await cachedRequest("catalog", () => api<Bootstrap["catalog"]>("/api/catalog"), 60_000, force)
+      ? await cachedRequest(
+          "catalog",
+          () => api<Bootstrap["catalog"]>("/api/catalog"),
+          60_000,
+          force,
+        )
       : cachedValue<Bootstrap["catalog"]>("catalog") || emptyCatalog();
     if (needsCatalog || cachedValue("catalog")) setCatalogReady(true);
     setState((current) => ({
       ...session,
       catalog,
-      orders: current?.user?.id === session.user?.id ? current?.orders || [] : [],
+      orders:
+        current?.user?.id === session.user?.id ? current?.orders || [] : [],
     }));
     if (!session.user || session.user.role !== "consumer") {
       ordersRequestRef.current += 1;
@@ -1610,33 +1639,48 @@ export default function App() {
     setLoadError("");
     setSelected((current) =>
       current
-        ? catalog.offerings.find((offer) => offer.id === current.id) ||
-          null
+        ? catalog.offerings.find((offer) => offer.id === current.id) || null
         : null,
     );
   }
   async function refreshCatalog(force = false, freshServer = false) {
     const requestId = ++catalogRequestRef.current;
     const catalog = await cachedRequest(
-      "catalog", () => api<Bootstrap["catalog"]>(freshServer ? "/api/catalog?fresh=1" : "/api/catalog"), 60_000, force,
+      "catalog",
+      () =>
+        api<Bootstrap["catalog"]>(
+          freshServer ? "/api/catalog?fresh=1" : "/api/catalog",
+        ),
+      60_000,
+      force,
     );
     if (requestId !== catalogRequestRef.current) return catalog;
     setState((current) => current ? { ...current, catalog } : current);
     setCatalogReady(true);
-    setSelected((current) => current
-      ? catalog.offerings.find((offer) => offer.id === current.id) || null
-      : null);
+    setSelected((current) =>
+      current
+        ? catalog.offerings.find((offer) => offer.id === current.id) || null
+        : null,
+    );
     return catalog;
   }
   async function refreshSession() {
     invalidateCache("session");
     const session = await cachedRequest(
-      "session", () => api<SessionData>("/api/session"), 300_000, true,
+      "session",
+      () => api<SessionData>("/api/session"),
+      300_000,
+      true,
     );
-    setState((current) => current ? {
-      ...current, ...session,
-      orders: current.user?.id === session.user?.id ? current.orders : [],
-    } : current);
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            ...session,
+            orders: current.user?.id === session.user?.id ? current.orders : [],
+          }
+        : current,
+    );
     if (!session.user || session.user.role !== "consumer") {
       ordersRequestRef.current += 1;
       invalidateCache("orders:");
@@ -1655,12 +1699,18 @@ export default function App() {
     const cached = cachedValue<OrdersPage>(key);
     if (!cached) setOrdersLoading(true);
     try {
-      const result = await cachedRequest(key,
+      const result = await cachedRequest(
+        key,
         () => api<OrdersPage>(`/api/orders?limit=10&offset=${targetPage * 10}`),
-        30_000, force);
+        30_000,
+        force,
+      );
       if (requestId !== ordersRequestRef.current) return;
-      setState((current) => current?.user?.id === user.id
-        ? { ...current, orders: result.orders } : current);
+      setState((current) =>
+        current?.user?.id === user.id
+          ? { ...current, orders: result.orders }
+          : current,
+      );
       setOrdersTotal(result.total);
       setOrdersLoaded(true);
     } finally {
@@ -1681,9 +1731,13 @@ export default function App() {
     };
     update();
     const timer = ["inicio", "buscar", "carrito"].includes(page)
-      ? window.setInterval(() => {
-          if (!document.hidden) refreshCatalog(true, page === "carrito").catch(() => {});
-        }, page === "carrito" ? 15_000 : 60_000)
+      ? window.setInterval(
+          () => {
+            if (!document.hidden)
+              refreshCatalog(true, page === "carrito").catch(() => {});
+          },
+          page === "carrito" ? 15_000 : 60_000,
+        )
       : null;
     document.addEventListener("visibilitychange", update);
     window.addEventListener("focus", update);
@@ -1762,9 +1816,8 @@ export default function App() {
   const hideCurrentWeek =
     state !== null &&
     !menuOffers.some((offer) => offer.week === 0 && offer.bookable);
-  const featuredWeek = offers.find(
-    (offer) => offer.date === nextMenuDate,
-  )?.week ?? 0;
+  const featuredWeek =
+    offers.find((offer) => offer.date === nextMenuDate)?.week ?? 0;
   const featuredWeekName =
     featuredWeek === 0 ? "esta semana" : "la próxima semana";
   const nextMenuDay = nextMenuDate
@@ -1984,9 +2037,7 @@ export default function App() {
       limaToday(),
     );
     setDayFilter(
-      firstDate
-        ? new Date(`${firstDate}T12:00:00Z`).getUTCDay() - 1
-        : null,
+      firstDate ? new Date(`${firstDate}T12:00:00Z`).getUTCDay() - 1 : null,
     );
     setPickupFilter(null);
   }
@@ -2294,9 +2345,13 @@ export default function App() {
             Cargando Menúu…
           </div>
         )}
-        {state && !catalogReady && ["inicio", "buscar", "carrito"].includes(page) && (
-          <div className="loading-state" role="status">Cargando menús…</div>
-        )}
+        {state &&
+          !catalogReady &&
+          ["inicio", "buscar", "carrito"].includes(page) && (
+            <div className="loading-state" role="status">
+              Cargando menús…
+            </div>
+          )}
         {state &&
           kitchenArea &&
           (kitchenSession ? (
@@ -2306,275 +2361,305 @@ export default function App() {
               onLogout={kitchenLogout}
             />
           ) : (
-            <KitchenAccess onAuthenticated={async () => { await refreshSession(); }} />
+            <KitchenAccess
+              onAuthenticated={async () => {
+                await refreshSession();
+              }}
+            />
           ))}
         {state &&
           adminArea &&
           (adminSession ? (
-            <AdminDashboard
-              user={state.user!}
-              onLogout={adminLogout}
-            />
+            <AdminDashboard user={state.user!} onLogout={adminLogout} />
           ) : (
-            <KitchenAccess role="admin" onAuthenticated={async () => { await refreshSession(); }} />
+            <KitchenAccess
+              role="admin"
+              onAuthenticated={async () => {
+                await refreshSession();
+              }}
+            />
           ))}
-        {state && catalogReady && !kitchenSession && !adminSession && page === "inicio" && (
-          <>
-            <div className="location-line">
-              <BrandLocationIcon size={22} />
-              <span>
-                Punto de encuentro: Entrada del Comedor UTEC en piso 2
-              </span>
-            </div>
-            {featured.length > 0 && (
-              <FeaturedCarousel slides={featured} onKitchen={goToNextKitchen} />
-            )}
-            <section
-              className="home-discovery"
-              aria-labelledby="popular-dishes-title"
-            >
-              <div className="section-heading">
-                <div>
-                  <span className="eyebrow">
-                    {hasWeeklyBookings ? "LOS MÁS ELEGIDOS" : "PARA DESCUBRIR"}
-                  </span>
-                  <h2 id="popular-dishes-title">
-                    {nextMenuLabel
-                      ? `Menús para ${nextMenuLabel}`
-                      : "Menús por venir"}
-                  </h2>
-                  <p>
-                    {hasWeeklyBookings
-                      ? `Ordenados por porciones reservadas de ${featuredWeekName}.`
-                      : topDishes.length
-                        ? "Estos platos tienen reservas disponibles para ese día."
-                        : "Aquí aparecerán los platos cuando las cocinas publiquen sus menús."}
-                  </p>
-                </div>
-                <button className="section-link" onClick={goToNextMenu}>
-                  Ver menú completo <ArrowRight size={18} />
-                </button>
+        {state &&
+          catalogReady &&
+          !kitchenSession &&
+          !adminSession &&
+          page === "inicio" && (
+            <>
+              <div className="location-line">
+                <BrandLocationIcon size={22} />
+                <span>
+                  Punto de encuentro: Entrada del Comedor UTEC en piso 2
+                </span>
               </div>
-              {topDishes.length ? (
-                <div className="product-grid">
-                  {topDishes.map((offer, index) => (
-                    <OfferingCard
-                      key={offer.id}
-                      offer={offer}
-                      kitchen={kitchens.find(
-                        (kitchen) => kitchen.id === offer.kitchenId,
-                      )}
-                      highlight={
-                        (weeklyScore(offer)?.units || 0) > 0
-                          ? `N.º ${index + 1} · ${featuredWeekName}`
-                          : undefined
-                      }
-                      onChoose={choose}
-                      onKitchen={goToNextKitchen}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <EmptyState
-                  icon={<BrandDishIcon size={32} />}
-                  title="Aún no hay platos publicados"
-                  body="Vuelve pronto para conocer los menús de las cocinas."
+              {featured.length > 0 && (
+                <FeaturedCarousel
+                  slides={featured}
+                  onKitchen={goToNextKitchen}
                 />
               )}
-            </section>
-            {topKitchens.length > 0 && (
               <section
-                className="home-discovery kitchen-discovery"
-                aria-labelledby="top-kitchens-title"
+                className="home-discovery"
+                aria-labelledby="popular-dishes-title"
               >
                 <div className="section-heading">
                   <div>
-                    <span className="eyebrow">HECHO CERCA DE TU BREAK</span>
-                    <h2 id="top-kitchens-title">
-                      {soldUnits > 0
-                        ? "Cocinas con más pedidos"
-                        : "Cocinas para conocer"}
+                    <span className="eyebrow">
+                      {hasWeeklyBookings
+                        ? "LOS MÁS ELEGIDOS"
+                        : "PARA DESCUBRIR"}
+                    </span>
+                    <h2 id="popular-dishes-title">
+                      {nextMenuLabel
+                        ? `Menús para ${nextMenuLabel}`
+                        : "Menús por venir"}
                     </h2>
                     <p>
-                      {soldUnits > 0
-                        ? "Ordenadas por platos entregados."
-                        : "Explora sus menús de esta semana y la siguiente."}
+                      {hasWeeklyBookings
+                        ? `Ordenados por porciones reservadas de ${featuredWeekName}.`
+                        : topDishes.length
+                          ? "Estos platos tienen reservas disponibles para ese día."
+                          : "Aquí aparecerán los platos cuando las cocinas publiquen sus menús."}
                     </p>
                   </div>
+                  <button className="section-link" onClick={goToNextMenu}>
+                    Ver menú completo <ArrowRight size={18} />
+                  </button>
                 </div>
-                <div className="kitchen-grid">
-                  {topKitchens.map((kitchen) => (
-                    <button
-                      type="button"
-                      className="kitchen-card"
-                      key={kitchen.id}
-                      onClick={() => goKitchen(kitchen.id)}
-                    >
-                      <img
-                        className="kitchen-card-logo"
-                        src={kitchen.logoUrl}
-                        alt=""
-                        loading="lazy"
+                {topDishes.length ? (
+                  <div className="product-grid">
+                    {topDishes.map((offer, index) => (
+                      <OfferingCard
+                        key={offer.id}
+                        offer={offer}
+                        kitchen={kitchens.find(
+                          (kitchen) => kitchen.id === offer.kitchenId,
+                        )}
+                        highlight={
+                          (weeklyScore(offer)?.units || 0) > 0
+                            ? `N.º ${index + 1} · ${featuredWeekName}`
+                            : undefined
+                        }
+                        onChoose={choose}
+                        onKitchen={goToNextKitchen}
                       />
-                      <span className="kitchen-card-copy">
-                        <strong>{kitchen.name}</strong>
-                        <span className="kitchen-rating">
-                          <Star
-                            size={17}
-                            strokeWidth={2.6}
-                            fill={
-                              kitchen.rating === null ? "none" : "currentColor"
-                            }
-                            aria-hidden="true"
-                          />
-                          {kitchen.rating === null
-                            ? "Aún sin puntuación"
-                            : `${kitchen.rating.toFixed(1)} · ${kitchen.ratingCount} ${kitchen.ratingCount === 1 ? "reseña" : "reseñas"}`}
-                        </span>
-                        <span className="kitchen-card-link">
-                          Ver cocina <ArrowRight size={17} />
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-          </>
-        )}
-        {state && catalogReady && !kitchenSession && !adminSession && page === "buscar" && (
-          <section className="page-section">
-            <div className="page-heading">
-              <span className="eyebrow">ELIGE TU ANTOJO</span>
-              <h1>{activeKitchen ? activeKitchen.name : "Menú semanal"}</h1>
-              <p>
-                {activeKitchen
-                  ? activeKitchen.description
-                  : "Revisa los días y la hora de recojo de cada cocina."}
-              </p>
-            </div>
-            {kitchenFilter && !activeKitchen ? (
-              <EmptyState
-                icon={<BrandStoreIcon size={32} />}
-                title="No encontramos esa cocina"
-                body="Revisa las cocinas disponibles en el menú."
-                action={
-                  <Button onClick={() => go("buscar")}>Ver todo el menú</Button>
-                }
-              />
-            ) : (
-              <WeekMenu
-                state={state}
-                week={week}
-                setWeek={changeWeek}
-                hideCurrentWeek={hideCurrentWeek}
-                dayFilter={dayFilter}
-                setDayFilter={(day) => {
-                  setMenuFilterManual(true);
-                  setDayFilter(day);
-                }}
-                pickupFilter={pickupFilter}
-                setPickupFilter={(pickup) => {
-                  setMenuFilterManual(true);
-                  setPickupFilter(pickup);
-                }}
-                pickupOptions={pickupOptions}
-                kitchenFilter={kitchenFilter}
-                onKitchen={(id) => filterKitchen(id)}
-                onAllKitchens={() => filterKitchen(null)}
-                query={query}
-                onQuery={setQuery}
-                visible={visible}
-                onChoose={choose}
-              />
-            )}
-          </section>
-        )}
-        {state && catalogReady && !kitchenSession && !adminSession && page === "carrito" && (
-          <section className="page-section narrow">
-            <div className="page-heading">
-              <span className="eyebrow">TU PEDIDO</span>
-              <h1>Tu carrito</h1>
-              <p>Revisa el cierre de reserva y el recojo de cada plato.</p>
-            </div>
-            {cartRows.length === 0 ? (
-              <EmptyState
-                icon={<BrandOrderBagIcon size={32} />}
-                title="Tu carrito está vacío"
-                body="Elige un plato del menú y aparecerá aquí."
-                action={
-                  <Button onClick={() => go("buscar")}>
-                    Ver menús <ArrowRight size={18} />
-                  </Button>
-                }
-              />
-            ) : (
-              <div className="cart-layout">
-                <div className="cart-items">
-                  {cartRows.map(({ item, offer }) => (
-                    <CartItemCard
-                      key={item.key}
-                      item={item}
-                      offer={offer}
-                      onQuantity={quantity}
-                      onRemove={removeFromCart}
-                    />
-                  ))}
-                </div>
-                <aside className="cart-summary">
-                  <h2>Resumen</h2>
-                  <div>
-                    <span>Total</span>
-                    <strong>{money(total)}</strong>
+                    ))}
                   </div>
-                  <p>
-                    Recoge cada plato en el comedor durante la ventana indicada.
-                  </p>
-                  <p>
-                    <strong>Pago:</strong> Yape anticipado. Apartaremos las porciones durante 15 minutos para que subas el comprobante.
-                  </p>
-                  {state.user?.role === "consumer" &&
-                    <PickupNotifications userId={state.user.id} />}
-                  {bookingError && (
-                    <p className="form-error" role="alert">
-                      {bookingError}
-                    </p>
-                  )}
-                  {state.user && !state.user.bookingAllowed && (
-                    <p className="form-error" role="status">
-                      No puedes reservar mientras tengas un pedido marcado como
-                      no recogido.
-                    </p>
-                  )}
-                  <Button
-                    onClick={submitBooking}
-                    disabled={
-                      booking ||
-                      state.user?.bookingAllowed === false ||
-                      cartRows.some(
-                        ({ item, offer }) =>
-                          !offer.bookable || offer.remaining < item.quantity,
-                      )
-                    }
-                  >
-                    {booking ? "Apartando…" : "Continuar al pago"}{" "}
-                    <ArrowRight size={18} />
-                  </Button>
-                  {cartRows.some(
-                    ({ item, offer }) =>
-                      !offer.bookable || offer.remaining < item.quantity,
-                  ) && (
-                    <p className="form-error">
-                      Hay un plato agotado, una reserva cerrada o más porciones
-                      en el carrito que las disponibles. Elimina o ajusta ese
-                      plato para continuar.
-                    </p>
-                  )}
-                </aside>
+                ) : (
+                  <EmptyState
+                    icon={<BrandDishIcon size={32} />}
+                    title="Aún no hay platos publicados"
+                    body="Vuelve pronto para conocer los menús de las cocinas."
+                  />
+                )}
+              </section>
+              {topKitchens.length > 0 && (
+                <section
+                  className="home-discovery kitchen-discovery"
+                  aria-labelledby="top-kitchens-title"
+                >
+                  <div className="section-heading">
+                    <div>
+                      <span className="eyebrow">HECHO CERCA DE TU BREAK</span>
+                      <h2 id="top-kitchens-title">
+                        {soldUnits > 0
+                          ? "Cocinas con más pedidos"
+                          : "Cocinas para conocer"}
+                      </h2>
+                      <p>
+                        {soldUnits > 0
+                          ? "Ordenadas por platos entregados."
+                          : "Explora sus menús de esta semana y la siguiente."}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="kitchen-grid">
+                    {topKitchens.map((kitchen) => (
+                      <button
+                        type="button"
+                        className="kitchen-card"
+                        key={kitchen.id}
+                        onClick={() => goKitchen(kitchen.id)}
+                      >
+                        <img
+                          className="kitchen-card-logo"
+                          src={kitchen.logoUrl}
+                          alt=""
+                          loading="lazy"
+                        />
+                        <span className="kitchen-card-copy">
+                          <strong>{kitchen.name}</strong>
+                          <span className="kitchen-rating">
+                            <Star
+                              size={17}
+                              strokeWidth={2.6}
+                              fill={
+                                kitchen.rating === null
+                                  ? "none"
+                                  : "currentColor"
+                              }
+                              aria-hidden="true"
+                            />
+                            {kitchen.rating === null
+                              ? "Aún sin puntuación"
+                              : `${kitchen.rating.toFixed(1)} · ${kitchen.ratingCount} ${kitchen.ratingCount === 1 ? "reseña" : "reseñas"}`}
+                          </span>
+                          <span className="kitchen-card-link">
+                            Ver cocina <ArrowRight size={17} />
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
+          )}
+        {state &&
+          catalogReady &&
+          !kitchenSession &&
+          !adminSession &&
+          page === "buscar" && (
+            <section className="page-section">
+              <div className="page-heading">
+                <span className="eyebrow">ELIGE TU ANTOJO</span>
+                <h1>{activeKitchen ? activeKitchen.name : "Menú semanal"}</h1>
+                <p>
+                  {activeKitchen
+                    ? activeKitchen.description
+                    : "Revisa los días y la hora de recojo de cada cocina."}
+                </p>
               </div>
-            )}
-          </section>
-        )}
+              {kitchenFilter && !activeKitchen ? (
+                <EmptyState
+                  icon={<BrandStoreIcon size={32} />}
+                  title="No encontramos esa cocina"
+                  body="Revisa las cocinas disponibles en el menú."
+                  action={
+                    <Button onClick={() => go("buscar")}>
+                      Ver todo el menú
+                    </Button>
+                  }
+                />
+              ) : (
+                <WeekMenu
+                  state={state}
+                  week={week}
+                  setWeek={changeWeek}
+                  hideCurrentWeek={hideCurrentWeek}
+                  dayFilter={dayFilter}
+                  setDayFilter={(day) => {
+                    setMenuFilterManual(true);
+                    setDayFilter(day);
+                  }}
+                  pickupFilter={pickupFilter}
+                  setPickupFilter={(pickup) => {
+                    setMenuFilterManual(true);
+                    setPickupFilter(pickup);
+                  }}
+                  pickupOptions={pickupOptions}
+                  kitchenFilter={kitchenFilter}
+                  onKitchen={(id) => filterKitchen(id)}
+                  onAllKitchens={() => filterKitchen(null)}
+                  query={query}
+                  onQuery={setQuery}
+                  visible={visible}
+                  onChoose={choose}
+                />
+              )}
+            </section>
+          )}
+        {state &&
+          catalogReady &&
+          !kitchenSession &&
+          !adminSession &&
+          page === "carrito" && (
+            <section className="page-section narrow">
+              <div className="page-heading">
+                <span className="eyebrow">TU PEDIDO</span>
+                <h1>Tu carrito</h1>
+                <p>Revisa el cierre de reserva y el recojo de cada plato.</p>
+              </div>
+              {cartRows.length === 0 ? (
+                <EmptyState
+                  icon={<BrandOrderBagIcon size={32} />}
+                  title="Tu carrito está vacío"
+                  body="Elige un plato del menú y aparecerá aquí."
+                  action={
+                    <Button onClick={() => go("buscar")}>
+                      Ver menús <ArrowRight size={18} />
+                    </Button>
+                  }
+                />
+              ) : (
+                <div className="cart-layout">
+                  <div className="cart-items">
+                    {cartRows.map(({ item, offer }) => (
+                      <CartItemCard
+                        key={item.key}
+                        item={item}
+                        offer={offer}
+                        onQuantity={quantity}
+                        onRemove={removeFromCart}
+                      />
+                    ))}
+                  </div>
+                  <aside className="cart-summary">
+                    <h2>Resumen</h2>
+                    <div>
+                      <span>Total</span>
+                      <strong>{money(total)}</strong>
+                    </div>
+                    <p>
+                      Recoge cada plato en el comedor durante la ventana
+                      indicada.
+                    </p>
+                    <p>
+                      <strong>Pago:</strong> Yape anticipado. Apartaremos las
+                      porciones durante 15 minutos para que subas el comprobante.
+                    </p>
+                    {state.user?.role === "consumer" && (
+                      <PickupNotifications userId={state.user.id} />
+                    )}
+                    {bookingError && (
+                      <p className="form-error" role="alert">
+                        {bookingError}
+                      </p>
+                    )}
+                    {state.user && !state.user.bookingAllowed && (
+                      <p className="form-error" role="status">
+                        No puedes reservar mientras tengas un pedido marcado
+                        como no recogido.
+                      </p>
+                    )}
+                    <Button
+                      onClick={submitBooking}
+                      disabled={
+                        booking ||
+                        state.user?.bookingAllowed === false ||
+                        cartRows.some(
+                          ({ item, offer }) =>
+                            !offer.bookable || offer.remaining < item.quantity,
+                        )
+                      }
+                    >
+                      {booking ? "Apartando…" : "Continuar al pago"}{" "}
+                      <ArrowRight size={18} />
+                    </Button>
+                    {cartRows.some(
+                      ({ item, offer }) =>
+                        !offer.bookable || offer.remaining < item.quantity,
+                    ) && (
+                      <p className="form-error">
+                        Hay un plato agotado, una reserva cerrada o más
+                        porciones en el carrito que las disponibles. Elimina o
+                        ajusta ese plato para continuar.
+                      </p>
+                    )}
+                  </aside>
+                </div>
+              )}
+            </section>
+          )}
         {state && !kitchenSession && !adminSession && page === "pedidos" && (
           <section className="page-section narrow">
             <div className="page-heading">
@@ -2594,7 +2679,11 @@ export default function App() {
                 }
               />
             ) : !ordersLoaded ? (
-              <p role="status">{ordersLoading ? "Cargando tus pedidos…" : "Actualiza para cargar tus pedidos."}</p>
+              <p role="status">
+                {ordersLoading
+                  ? "Cargando tus pedidos…"
+                  : "Actualiza para cargar tus pedidos."}
+              </p>
             ) : state.orders.length === 0 ? (
               <EmptyState
                 icon={<BrandOrdersIcon size={30} />}
@@ -2615,20 +2704,38 @@ export default function App() {
                     showPayment={!order.paymentCheckoutId || state.orders.findIndex((candidate) => candidate.paymentCheckoutId === order.paymentCheckoutId) === index}
                     onReviewed={async () => {
                       invalidateCache("orders:");
-                      await Promise.all([loadOrders(ordersPage, true), refreshCatalog(true, true)]);
+                      await Promise.all([
+                        loadOrders(ordersPage, true),
+                        refreshCatalog(true, true),
+                      ]);
                     }}
                   />
                 ))}
                 {ordersTotal > 10 && (
                   <nav className="orders-pages" aria-label="Páginas de pedidos">
-                    <Button variant="secondary" disabled={ordersPage === 0 || ordersLoading}
-                      onClick={() => { setOrdersLoaded(false); setOrdersPage(ordersPage - 1); }}>
+                    <Button
+                      variant="secondary"
+                      disabled={ordersPage === 0 || ordersLoading}
+                      onClick={() => {
+                        setOrdersLoaded(false);
+                        setOrdersPage(ordersPage - 1);
+                      }}
+                    >
                       Anterior
                     </Button>
-                    <span>Página {ordersPage + 1} de {Math.ceil(ordersTotal / 10)}</span>
-                    <Button variant="secondary"
-                      disabled={(ordersPage + 1) * 10 >= ordersTotal || ordersLoading}
-                      onClick={() => { setOrdersLoaded(false); setOrdersPage(ordersPage + 1); }}>
+                    <span>
+                      Página {ordersPage + 1} de {Math.ceil(ordersTotal / 10)}
+                    </span>
+                    <Button
+                      variant="secondary"
+                      disabled={
+                        (ordersPage + 1) * 10 >= ordersTotal || ordersLoading
+                      }
+                      onClick={() => {
+                        setOrdersLoaded(false);
+                        setOrdersPage(ordersPage + 1);
+                      }}
+                    >
                       Siguiente
                     </Button>
                   </nav>
@@ -2648,7 +2755,9 @@ export default function App() {
                 <AccountProfile
                   user={state.user}
                   careers={state.careers}
-                  onSaved={async () => { await refreshSession(); }}
+                  onSaved={async () => {
+                    await refreshSession();
+                  }}
                   onLogout={logout}
                 />
               </>
@@ -3109,8 +3218,10 @@ function PaymentInstructions({ order, onUploaded }: { order: Order; onUploaded: 
     try {
       if (file.size > 2_000_000 || !["image/png", "image/jpeg"].includes(file.type))
         throw new Error("El comprobante debe ser PNG o JPG de hasta 2 MB.");
+      const csrf = document.cookie.split(";").map((part) => part.trim())
+        .find((part) => part.startsWith("menuu_csrf="))?.slice("menuu_csrf=".length);
       const response = await fetch(`/api/payments/${order.paymentCheckoutId}/proof`, {
-        method: "POST", headers: { "Content-Type": file.type }, body: file,
+        method: "POST", headers: { "Content-Type": file.type, ...(csrf ? { "X-CSRF-Token": csrf } : {}) }, body: file,
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "No pudimos subir el comprobante.");

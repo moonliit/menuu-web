@@ -283,12 +283,14 @@ export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
       customization: offerOptions.get(row.id) || [],
     })),
     reservations: reservations.rows,
-    analytics: includeAnalytics ? {
-      offers: stats.rows,
-      bookingHours: hours.rows,
-      bookingTimeline: timeline.rows,
-      totalOrders: orders.rows[0].count,
-    } : null,
+    analytics: includeAnalytics
+      ? {
+          offers: stats.rows,
+          bookingHours: hours.rows,
+          bookingTimeline: timeline.rows,
+          totalOrders: orders.rows[0].count,
+        }
+      : null,
   };
 }
 
@@ -301,11 +303,13 @@ export async function kitchenStudentCandidates(
   page = null,
 ) {
   const query = text(search, 80);
+
   if (query.length > 80) fail("Búsqueda demasiado larga.");
   const offer = await getDb().query(
     "SELECT id FROM offers WHERE id=$1 AND kitchen_id=$2",
     [offerId, kitchenId],
   );
+
   if (!offer.rowCount) fail("Menú no encontrado.", 404);
   const where = `FROM users u WHERE u.role='consumer'
        AND (u.name LIKE $2 OR u.email LIKE $2)
@@ -320,8 +324,10 @@ export async function kitchenStudentCandidates(
       [...args, page?.limit ?? 30, page?.offset ?? 0],
     )
   ).rows;
+
   if (!page) return students;
   const count = await getDb().query(`SELECT count(*) AS total ${where}`, args);
+
   return { students, total: Number(count.rows[0].total) };
 }
 
@@ -329,6 +335,7 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
   const offerId = typeof data?.offerId === "string" ? data.offerId : "";
   const studentId = typeof data?.studentId === "string" ? data.studentId : "";
   const quantity = Number(data?.quantity ?? 1);
+
   if (
     !offerId ||
     !studentId ||
@@ -337,6 +344,7 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
     quantity > 10
   )
     fail("Revisa el estudiante y la cantidad de porciones.");
+
   return transaction(async (db) => {
     const offer = (
       await db.query(
@@ -346,13 +354,16 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
         [offerId, kitchenId],
       )
     ).rows[0];
+
     if (!offer) fail("Menú no encontrado.", 404);
     const student = (
       await db.query("SELECT id FROM users WHERE id=$1 AND role='consumer'", [
         studentId,
       ])
     ).rows[0];
+
     if (!student) fail("Estudiante no encontrado.", 404);
+
     if (
       (
         await db.query(
@@ -362,6 +373,7 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
       ).rowCount
     )
       fail("Este estudiante ya tiene una reserva en este menú.", 409);
+
     if (
       (
         await db.query(
@@ -376,6 +388,7 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
        WHERE id=$1 AND kitchen_id=$2 AND reserved_count+$3<=capacity RETURNING id`,
       [offerId, kitchenId, quantity, new Date().toISOString()],
     );
+
     if (!stock.rowCount) fail("No quedan suficientes porciones.", 409);
     const orderId = randomUUID();
     const total = offer.priceCents * quantity;
@@ -383,6 +396,7 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
       Date.now() >=
       new Date(`${offer.date}T${offer.pickupUntil}:00-05:00`).getTime();
     const createdAt = new Date().toISOString();
+
     await db.query(
       `INSERT INTO orders(id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,fulfillment_status,created_at,delivered_at)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reservado','QR al recibir',$10,$11,$12,$13)`,
@@ -417,6 +431,7 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
         offer.bookingDeadline,
       ],
     );
+
     await db.query(
       "INSERT INTO kitchen_reservation_events(id,order_id,actor_user_id,action,detail) VALUES($1,$2,$3,'manual_add',$4)",
       [
@@ -426,28 +441,43 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
         `${quantity} porción(es) en ${offerId}${extraordinary ? " · extraordinaria entregada" : ""}`,
       ],
     );
+
     return { orderId, orderItemId: addedItem.rows[0].id, extraordinary };
   });
 }
 
-export async function updateKitchenReservation(kitchenId, actorId, data, allowDeliveryTimeEdit = false) {
+export async function updateKitchenReservation(
+  kitchenId,
+  actorId,
+  data,
+  allowDeliveryTimeEdit = false,
+) {
   const orderId = typeof data?.orderId === "string" ? data.orderId : "";
   const action = data?.action;
+
   if (!orderId || !["deliver", "cancel", "reset", "payment"].includes(action))
     fail("Cambio de reserva inválido.");
-  if (data?.deliveredAt !== undefined && (!allowDeliveryTimeEdit || action !== "deliver"))
+
+  if (
+    data?.deliveredAt !== undefined &&
+    (!allowDeliveryTimeEdit || action !== "deliver")
+  )
     fail("Solo admin puede cambiar la fecha de entrega.", 403);
   let requestedDeliveredAt = null;
+
   if (data?.deliveredAt !== undefined) {
     const value = data.deliveredAt;
     const [date, time] = typeof value === "string" ? value.split("T") : [];
+
     if (!validDate(date) || !validTime(time))
       fail("Indica una fecha y hora de entrega válidas.");
     const moment = new Date(`${date}T${time}:00-05:00`);
+
     if (moment.getTime() > Date.now())
       fail("La entrega no puede tener una fecha futura.");
     requestedDeliveredAt = moment.toISOString();
   }
+
   return transaction(async (db) => {
     const order = (
       await db.query(
@@ -457,7 +487,9 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
         [orderId, kitchenId],
       )
     ).rows[0];
+
     if (!order) fail("Reserva no encontrada.", 404);
+
     if (order.status !== "reservado")
       fail("Esta reserva ya está cancelada.", 409);
     if (order.paymentCheckoutId) {
@@ -474,11 +506,14 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
         [orderId, kitchenId],
       )
     ).rows;
+
     if (!items.length) fail("La reserva no tiene platos.", 409);
     let detail = "";
+
     if (action === "payment") {
       if (order.fulfillmentStatus !== "delivered")
         fail("Registra el pago al marcar la reserva como entregada.", 409);
+
       if (!paymentMethods.has(data.paymentMethod))
         fail("Selecciona un medio de pago válido.");
       await db.query(
@@ -489,6 +524,7 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
     } else {
       if (action === "deliver" && !paymentMethods.has(data.paymentMethod))
         fail("Selecciona un medio de pago válido.");
+
       if (
         action === "cancel" &&
         Date.now() <
@@ -498,6 +534,7 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
           "Espera hasta que termine la ventana de recojo para marcar ausencia.",
           409,
         );
+
       if (
         action === "cancel" &&
         new Date(order.createdAt).getTime() >
@@ -507,8 +544,12 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
           "Una reserva extraordinaria posterior al recojo no se puede marcar como ausencia.",
           409,
         );
+
       if (action === "cancel" && order.fulfillmentStatus === "delivered")
-        fail("Una entrega registrada no se puede marcar como ausencia. Corrige primero su estado.", 409);
+        fail(
+          "Una entrega registrada no se puede marcar como ausencia. Corrige primero su estado.",
+          409,
+        );
       const fulfillment =
         action === "deliver"
           ? "delivered"
@@ -521,9 +562,12 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
             (order.fulfillmentStatus === "delivered" && order.deliveredAt) ||
             new Date().toISOString()
           : null;
-      const pickupEnd = new Date(`${order.date}T${order.pickupUntil}:00-05:00`).getTime();
+      const pickupEnd = new Date(
+        `${order.date}T${order.pickupUntil}:00-05:00`,
+      ).getTime();
       const extraordinaryManual =
         order.manualAdded && new Date(order.createdAt).getTime() >= pickupEnd;
+
       if (
         action === "deliver" &&
         requestedDeliveredAt &&
@@ -536,20 +580,24 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
         items.find((item) => item.id === selectedId) ||
         (items.length === 1 ? items[0] : null);
       const deliveredQuantity = Number(data.deliveredQuantity);
+
       if (
         action === "deliver" &&
-        (!selectedItem || !Number.isInteger(deliveredQuantity) || deliveredQuantity < 1)
+        (!selectedItem ||
+          !Number.isInteger(deliveredQuantity) ||
+          deliveredQuantity < 1)
       )
         fail("Indica entre 1 y el cupo disponible de porciones entregadas.");
       if (action === "deliver" && order.paymentCheckoutId && deliveredQuantity > selectedItem.quantity)
         fail("La porción adicional debe registrarse como una venta aparte con su propio medio de pago.", 409);
       const changes = new Map();
+
       for (const item of items) {
         const previous =
           order.fulfillmentStatus === "no_show"
             ? 0
             : order.fulfillmentStatus === "delivered"
-              ? item.deliveredQuantity ?? item.quantity
+              ? (item.deliveredQuantity ?? item.quantity)
               : item.quantity;
         const next =
           fulfillment === "no_show"
@@ -558,12 +606,23 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
               ? item.quantity
               : item.id === selectedItem.id
                 ? deliveredQuantity
-                : item.deliveredQuantity ?? item.quantity;
-        changes.set(item.offerId, (changes.get(item.offerId) || 0) + next - previous);
+                : (item.deliveredQuantity ?? item.quantity);
+
+        changes.set(
+          item.offerId,
+          (changes.get(item.offerId) || 0) + next - previous,
+        );
+
         if (action === "deliver")
-          await db.query("UPDATE order_items SET delivered_quantity=$2 WHERE id=$1", [item.id, next]);
+          await db.query(
+            "UPDATE order_items SET delivered_quantity=$2 WHERE id=$1",
+            [item.id, next],
+          );
         else if (action === "reset")
-          await db.query("UPDATE order_items SET delivered_quantity=NULL WHERE id=$1", [item.id]);
+          await db.query(
+            "UPDATE order_items SET delivered_quantity=NULL WHERE id=$1",
+            [item.id],
+          );
       }
       for (const [offerId, delta] of changes) {
         if (!delta) continue;
@@ -573,6 +632,7 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
            WHERE id=$1 AND kitchen_id=$2 AND reserved_count+$3 BETWEEN 0 AND capacity RETURNING id`,
           [offerId, kitchenId, delta, new Date().toISOString()],
         );
+
         if (!changed.rowCount)
           fail(
             action === "reset"
@@ -588,14 +648,25 @@ export async function updateKitchenReservation(kitchenId, actorId, data, allowDe
          created_at=CASE WHEN $6=1 THEN $5 ELSE created_at END,
          review_enabled=CASE WHEN $3='delivered' THEN review_enabled ELSE 0 END
          WHERE id=$1 AND kitchen_id=$2`,
-        [orderId, kitchenId, fulfillment, action === "deliver" ? data.paymentMethod : null, deliveredAt, Boolean(requestedDeliveredAt && extraordinaryManual)],
+        [
+          orderId,
+          kitchenId,
+          fulfillment,
+          action === "deliver" ? data.paymentMethod : null,
+          deliveredAt,
+          Boolean(requestedDeliveredAt && extraordinaryManual),
+        ],
       );
-      detail = action === "deliver" ? `${fulfillment}: ${deliveredQuantity} porción(es), ${data.paymentMethod}, ${deliveredAt}` : fulfillment;
+      detail =
+        action === "deliver"
+          ? `${fulfillment}: ${deliveredQuantity} porción(es), ${data.paymentMethod}, ${deliveredAt}`
+          : fulfillment;
     }
     await db.query(
       "INSERT INTO kitchen_reservation_events(id,order_id,actor_user_id,action,detail) VALUES($1,$2,$3,$4,$5)",
       [randomUUID(), orderId, actorId, action, detail],
     );
+
     return { ok: true };
   });
 }

@@ -8,8 +8,8 @@
 
 ## Tablas
 
-| Tabla                                                   | Contenido                                                               |
-| ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Tabla                                                   | Contenido                                                                       |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `users`, `sessions`                                     | Estudiantes, cocinas, admins y sesiones persistentes; contraseñas con `scrypt`. |
 | `admin_offer_events`                                    | Cambios de cupo hechos por admin, con actor y fecha. |
 | `kitchens`, `kitchen_images`                            | Perfil y fotos de cocina.                                               |

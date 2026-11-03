@@ -1,8 +1,9 @@
-﻿import { createServer } from "node:http";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { OAuth2Client } from "google-auth-library";
 import { deliveryMoment } from "./catalog.mjs";
 import {
   adminData,
@@ -11,16 +12,18 @@ import {
   updateAdminCapacity,
 } from "./admin.mjs";
 import { careers } from "./careers.mjs";
-import { closeDb } from "./db.mjs";
+import { closeDb, getDb } from "./db.mjs";
 import {
   cancelOrder,
   createBooking,
   findUserByEmail,
+  findUserByGoogleSub,
   getCatalog,
   getOrders,
   getOrdersPage,
   insertSession,
   insertUser,
+  linkGoogleSub,
   removeSession,
   submitReview,
   updateConsumerProfile,
@@ -43,11 +46,92 @@ import { migrate } from "../scripts/migrate.mjs";
 import { dispatchPickupReminders, pushConfig, removePushSubscription, savePushSubscription, validDispatchSecret } from "./push.mjs";
 import { expireUnpaidCheckouts, paymentProof, pendingPayments, reviewPayment, submitPaymentProof } from "./payments.mjs";
 
+const googleClientId =
+  process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
+const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
+
 const root = fileURLToPath(new URL("../", import.meta.url));
 const isDev = process.argv.includes("--dev");
 const port = Number(process.env.PORT || (isDev ? 5173 : 4173));
 let migrationPromise;
 let vite = null;
+const rateLimitWindowMs = 60_000;
+const rateLimitBuckets = new Map();
+const runningOnVercel = process.env.VERCEL === "1";
+
+function requestIp(req) {
+  if (runningOnVercel) {
+    const vercelIp = req.headers["x-real-ip"];
+
+    if (typeof vercelIp === "string" && vercelIp.trim()) return vercelIp.trim();
+  }
+
+  return req.socket.remoteAddress || "unknown";
+}
+
+function rateLimit(req, res, bucket, limit) {
+  const now = Date.now();
+  const key = `${bucket}:${requestIp(req)}`;
+  let entry = rateLimitBuckets.get(key);
+
+  if (rateLimitBuckets.size > 1_000) {
+    for (const [storedKey, storedEntry] of rateLimitBuckets)
+      if (storedEntry.expiresAt <= now) rateLimitBuckets.delete(storedKey);
+  }
+
+  if (!entry || entry.expiresAt <= now) {
+    entry = { count: 0, expiresAt: now + rateLimitWindowMs };
+    rateLimitBuckets.set(key, entry);
+  }
+
+  entry.count += 1;
+
+  const remaining = Math.max(0, limit - entry.count);
+
+  res.setHeader("X-RateLimit-Limit", limit);
+  res.setHeader("X-RateLimit-Remaining", remaining);
+
+  if (entry.count <= limit) return false;
+
+  res.setHeader(
+    "Retry-After",
+    Math.max(1, Math.ceil((entry.expiresAt - now) / 1000)),
+  );
+  error(res, 429, "Demasiadas solicitudes. Intenta nuevamente más tarde.");
+
+  return true;
+}
+
+function applyRateLimit(req, res, url) {
+  let bucket;
+  let limit;
+
+  if (url.pathname === "/api/auth/google") {
+    bucket = "auth-google";
+    limit = 10;
+  } else if (url.pathname === "/api/bookings") {
+    bucket = "bookings";
+    limit = 10;
+  } else if (
+    /^\/api\/orders\/[a-zA-Z0-9-]+\/(?:cancel|review)$/.test(url.pathname)
+  ) {
+    bucket = url.pathname.endsWith("/cancel") ? "order-cancel" : "order-review";
+    limit = 20;
+  } else if (url.pathname === "/api/catalog") {
+    bucket = url.searchParams.has("fresh") ? "catalog-fresh" : "catalog";
+    limit = url.searchParams.has("fresh") ? 10 : 60;
+  } else if (url.pathname === "/api/bootstrap") {
+    bucket = "bootstrap";
+    limit = 60;
+  } else if (url.pathname === "/api/session") {
+    bucket = "session";
+    limit = 120;
+  } else {
+    return false;
+  }
+
+  return rateLimit(req, res, bucket, limit);
+}
 
 function ensureMigrated() {
   if (!migrationPromise)
@@ -126,12 +210,19 @@ async function body(req) {
 }
 
 function sessionToken(req) {
-  const cookie = req.headers.cookie
+  const cookie = cookieValue(req, "menuu_session");
+
+  return cookie;
+}
+
+function cookieValue(req, name) {
+  const prefix = `${name}=`;
+
+  return req.headers.cookie
     ?.split(";")
     .map((part) => part.trim())
-    .find((part) => part.startsWith("menuu_session="));
-
-  return cookie?.slice("menuu_session=".length);
+    .find((part) => part.startsWith(prefix))
+    ?.slice(prefix.length);
 }
 
 function sessionCookie(req, token, age) {
@@ -140,6 +231,32 @@ function sessionCookie(req, token, age) {
     Boolean(req.socket.encrypted);
 
   return `menuu_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${age}${secure ? "; Secure" : ""}`;
+}
+
+function csrfCookie(req, token, age) {
+  const secure =
+    req.headers["x-forwarded-proto"] === "https" ||
+    Boolean(req.socket.encrypted);
+
+  return `menuu_csrf=${token}; SameSite=Lax; Path=/; Max-Age=${age}${secure ? "; Secure" : ""}`;
+}
+
+function setSessionCookies(req, res, token, age) {
+  res.setHeader("Set-Cookie", [
+    sessionCookie(req, token, age),
+    csrfCookie(req, age ? randomBytes(32).toString("hex") : "", age),
+  ]);
+}
+
+function validCsrf(req) {
+  const cookie = cookieValue(req, "menuu_csrf");
+  const header = req.headers["x-csrf-token"];
+
+  if (!cookie || typeof header !== "string") return false;
+  const expected = Buffer.from(cookie);
+  const actual = Buffer.from(header);
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 function sameOrigin(req) {
@@ -157,6 +274,35 @@ function validateEmail(email) {
   return (
     typeof email === "string" && /^[^\s@]+@utec\.edu\.pe$/i.test(email.trim())
   );
+}
+
+async function verifyGoogleCredential(credential) {
+  if (!googleClient || !googleClientId)
+    throw new Error("Falta GOOGLE_CLIENT_ID para validar Google.");
+
+  const ticket = await googleClient.verifyIdToken({
+    idToken: credential,
+    audience: googleClientId,
+  });
+  const payload = ticket.getPayload();
+
+  if (
+    !payload ||
+    (payload.iss !== "accounts.google.com" &&
+      payload.iss !== "https://accounts.google.com") ||
+    payload.email_verified !== true ||
+    typeof payload.sub !== "string" ||
+    !payload.sub ||
+    typeof payload.email !== "string" ||
+    !payload.email
+  )
+    throw new Error("Las credenciales de Google no son válidas.");
+
+  return {
+    email: payload.email.trim().toLowerCase(),
+    name: typeof payload.name === "string" ? payload.name.trim() : "",
+    sub: payload.sub,
+  };
 }
 
 function validBirthDate(value) {
@@ -188,9 +334,17 @@ function validBirthDate(value) {
 function listPage(url, defaultLimit = 20) {
   const limit = Number(url.searchParams.get("limit") ?? defaultLimit);
   const offset = Number(url.searchParams.get("offset") ?? 0);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 20 ||
-      !Number.isInteger(offset) || offset < 0 || offset > 100000)
+
+  if (
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > 20 ||
+    !Number.isInteger(offset) ||
+    offset < 0 ||
+    offset > 100000
+  )
     throw Object.assign(new Error("Paginación inválida."), { status: 400 });
+
   return { limit, offset };
 }
 
@@ -210,23 +364,43 @@ function visibleOrder(order, now = new Date()) {
 }
 
 async function handleApi(req, res, url) {
+  if (applyRateLimit(req, res, url)) return;
+
   if (url.pathname === "/api/catalog" || url.pathname === "/api/bookings" || url.pathname === "/api/orders" || url.pathname === "/api/bootstrap" || url.pathname === "/api/admin/data")
     await expireUnpaidCheckouts();
   if (req.method === "GET" && url.pathname === "/api/push/dispatch") {
     if (!validDispatchSecret(req.headers.authorization))
       return error(res, 401, "Acceso no permitido.");
+
     return json(res, 200, await dispatchPickupReminders());
   }
+
   if (req.method === "GET" && url.pathname === "/api/push/config")
     return json(res, 200, pushConfig());
-  if (url.pathname === "/api/push/subscription" || url.pathname === "/api/push/unsubscribe") {
-    if (req.method !== "POST" || !sameOrigin(req)) return error(res, 403, "Solicitud no permitida.");
+
+  if (
+    url.pathname === "/api/push/subscription" ||
+    url.pathname === "/api/push/unsubscribe"
+  ) {
+    if (
+      req.method !== "POST" ||
+      !sameOrigin(req) ||
+      (sessionToken(req) && !validCsrf(req))
+    )
+      return error(res, 403, "Solicitud no permitida.");
     const user = await userFromSession(sessionToken(req));
-    if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+
+    if (!user || user.role !== "consumer")
+      return error(res, 401, "Inicia sesión como estudiante.");
     const data = await body(req);
-    return json(res, 200, url.pathname === "/api/push/subscription"
-      ? await savePushSubscription(user.id, data)
-      : await removePushSubscription(user.id, data?.endpoint));
+
+    return json(
+      res,
+      200,
+      url.pathname === "/api/push/subscription"
+        ? await savePushSubscription(user.id, data)
+        : await removePushSubscription(user.id, data?.endpoint),
+    );
   }
   const imageMatch = /^\/api\/kitchen\/image\/([a-f0-9-]{36})$/.exec(
     url.pathname,
@@ -247,7 +421,9 @@ async function handleApi(req, res, url) {
 
   if (url.pathname.startsWith("/api/admin/")) {
     const user = await userFromSession(sessionToken(req));
+
     if (!user) return error(res, 401, "Inicia sesión como admin.");
+
     if (user.role !== "admin")
       return error(res, 403, "Acceso de admin requerido.");
     if (req.method === "GET" && url.pathname === "/api/admin/payments")
@@ -256,16 +432,28 @@ async function handleApi(req, res, url) {
       const weekValue = url.searchParams.get("week");
       const week = weekValue === null ? null : Number(weekValue);
       const kitchen = url.searchParams.get("kitchen") || "all";
-      if ((week !== null && ![0, 1].includes(week)) ||
-          (kitchen !== "all" && !/^[a-zA-Z0-9-]{1,100}$/.test(kitchen)))
+
+      if (
+        (week !== null && ![0, 1].includes(week)) ||
+        (kitchen !== "all" && !/^[a-zA-Z0-9-]{1,100}$/.test(kitchen))
+      )
         return error(res, 400, "Filtros inválidos.");
-      return json(res, 200, await adminData({ week, kitchen, ...listPage(url) }));
+
+      return json(
+        res,
+        200,
+        await adminData({ week, kitchen, ...listPage(url) }),
+      );
     }
     const candidatesMatch =
       /^\/api\/admin\/offers\/([a-zA-Z0-9-]+)\/students$/.exec(url.pathname);
+
     if (req.method === "GET" && candidatesMatch) {
       const kitchenId = await adminOfferKitchen(candidatesMatch[1]);
-      return json(res, 200,
+
+      return json(
+        res,
+        200,
         await kitchenStudentCandidates(
           kitchenId,
           candidatesMatch[1],
@@ -274,7 +462,12 @@ async function handleApi(req, res, url) {
         ),
       );
     }
-    if (req.method !== "POST" || !sameOrigin(req))
+
+    if (
+      req.method !== "POST" ||
+      !sameOrigin(req) ||
+      (sessionToken(req) && !validCsrf(req))
+    )
       return error(res, 403, "Solicitud no permitida.");
     const data = await body(req);
     const reviewMatch = /^\/api\/admin\/payments\/([a-f0-9-]{36})\/review$/.exec(url.pathname);
@@ -282,8 +475,10 @@ async function handleApi(req, res, url) {
       return json(res, 200, await reviewPayment(reviewMatch[1], user.id, data?.decision, data?.note));
     if (url.pathname === "/api/admin/offers/capacity")
       return json(res, 200, await updateAdminCapacity(user.id, data));
+
     if (url.pathname === "/api/admin/reservations/add") {
       const kitchenId = await adminOfferKitchen(data?.offerId);
+
       return json(
         res,
         201,
@@ -296,12 +491,14 @@ async function handleApi(req, res, url) {
     }
     if (url.pathname === "/api/admin/reservations/update") {
       const kitchenId = await adminOrderKitchen(data?.orderId);
+
       return json(
         res,
         200,
         await updateKitchenReservation(kitchenId, user.id, data, true),
       );
     }
+
     return error(res, 404, "Ruta no encontrada.");
   }
 
@@ -312,14 +509,21 @@ async function handleApi(req, res, url) {
       return error(res, 401, "Inicia sesión como cocina.");
 
     if (req.method === "GET" && url.pathname === "/api/kitchen/data") {
-      return json(res, 200, await kitchenData(user.kitchenId, {
-        includeAnalytics: url.searchParams.get("scope") !== "operations",
-      }));
+      return json(
+        res,
+        200,
+        await kitchenData(user.kitchenId, {
+          includeAnalytics: url.searchParams.get("scope") !== "operations",
+        }),
+      );
     }
     const candidatesMatch =
       /^\/api\/kitchen\/offers\/([a-zA-Z0-9-]+)\/students$/.exec(url.pathname);
+
     if (req.method === "GET" && candidatesMatch)
-      return json(res, 200,
+      return json(
+        res,
+        200,
         await kitchenStudentCandidates(
           user.kitchenId,
           candidatesMatch[1],
@@ -328,7 +532,11 @@ async function handleApi(req, res, url) {
         ),
       );
 
-    if (req.method !== "POST" || !sameOrigin(req))
+    if (
+      req.method !== "POST" ||
+      !sameOrigin(req) ||
+      (sessionToken(req) && !validCsrf(req))
+    )
       return error(res, 403, "Solicitud no permitida.");
 
     if (url.pathname === "/api/kitchen/photo") {
@@ -401,20 +609,33 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/session") {
     const user = await userFromSession(sessionToken(req));
+
+    if (!cookieValue(req, "menuu_csrf"))
+      res.setHeader(
+        "Set-Cookie",
+        csrfCookie(req, randomBytes(32).toString("hex"), 7 * 86400),
+      );
+
     return json(res, 200, { user: publicUser(user), careers });
   }
 
   if (req.method === "GET" && url.pathname === "/api/catalog")
-    return json(res, 200, await getCatalog(),
+    return json(
+      res,
+      200,
+      await getCatalog(),
       url.searchParams.has("fresh")
         ? "no-store"
-        : "public, max-age=15, s-maxage=30, stale-while-revalidate=30");
+        : "public, max-age=15, s-maxage=30, stale-while-revalidate=30",
+    );
 
   if (req.method === "GET" && url.pathname === "/api/orders") {
     const user = await userFromSession(sessionToken(req));
+
     if (!user || user.role !== "consumer")
       return error(res, 401, "Inicia sesión como estudiante.");
     const page = await getOrdersPage(user.id, listPage(url, 10));
+
     return json(res, 200, {
       ...page,
       orders: page.orders.map((order) => visibleOrder(order)),
@@ -429,7 +650,8 @@ async function handleApi(req, res, url) {
     return res.end(proof.content);
   }
   if (req.method === "POST" && proofMatch) {
-    if (!sameOrigin(req)) return error(res, 403, "Origen no permitido.");
+    if (!sameOrigin(req) || (sessionToken(req) && !validCsrf(req)))
+      return error(res, 403, "Origen o token CSRF no permitido.");
     const user = await userFromSession(sessionToken(req));
     if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
     const mimeType = String(req.headers["content-type"] || "").split(";")[0];
@@ -467,26 +689,149 @@ async function handleApi(req, res, url) {
   if (req.method !== "POST") return error(res, 404, "Ruta no encontrada.");
 
   if (!sameOrigin(req)) return error(res, 403, "Origen no permitido.");
+
+  if (sessionToken(req) && !validCsrf(req))
+    return error(res, 403, "Token CSRF inválido.");
   const data = await body(req);
 
   if (url.pathname === "/api/auth/register") {
-    const name = typeof data.name === "string" ? data.name.trim() : "";
+    return error(
+      res,
+      403,
+      "El registro de estudiantes solo está disponible con Google.",
+    );
+  }
+
+  if (url.pathname === "/api/auth/login") {
+    const role = ["consumer", "kitchen", "admin"].includes(data.role)
+      ? data.role
+      : "consumer";
+
+    if (role === "consumer")
+      return error(
+        res,
+        403,
+        "El acceso de estudiantes solo está disponible con Google.",
+      );
+
     const email =
       typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
     const password = typeof data.password === "string" ? data.password : "";
+    const user = await findUserByEmail(email);
+
+    if (!user || !verifyPassword(password, user.passwordHash))
+      return error(res, 401, "Correo o contraseña incorrectos.");
+
+    if (user.role !== role)
+      return error(
+        res,
+        403,
+        role === "kitchen"
+          ? "Esta cuenta no tiene acceso de cocina."
+          : "Esta cuenta no tiene acceso de admin.",
+      );
+    const token = randomBytes(32).toString("hex");
+
+    await insertSession(token, user.id);
+    setSessionCookies(req, res, token, 7 * 86400);
+
+    return json(res, 200, { user: publicUser(user) });
+  }
+
+  if (url.pathname === "/api/auth/google") {
+    if (typeof data.credential !== "string" || !data.credential)
+      return error(res, 401, "Se requiere una credencial válida de Google.");
+
+    let googleIdentity;
+
+    try {
+      googleIdentity = await verifyGoogleCredential(data.credential);
+    } catch (cause) {
+      if (cause?.message === "Falta GOOGLE_CLIENT_ID para validar Google.")
+        throw cause;
+
+      return error(res, 401, "La credencial de Google no es válida.");
+    }
+
+    const { email, name, sub } = googleIdentity;
+
+    if (!email) return error(res, 400, "Indica tu cuenta de Google.");
+
+    if (!validateEmail(email))
+      return error(
+        res,
+        400,
+        "Solo puedes acceder con una cuenta institucional de Google (@utec.edu.pe).",
+      );
+
+    let user = await findUserByGoogleSub(sub);
+
+    if (user && user.email !== email)
+      return error(
+        res,
+        409,
+        "Esta identidad de Google ya está vinculada a otra cuenta.",
+      );
+
+    if (!user) user = await findUserByEmail(email);
+
+    if (user) {
+      if (user.role !== "consumer")
+        return error(
+          res,
+          403,
+          "Esta cuenta pertenece a una cocina. Usa el acceso de cocinas.",
+        );
+
+      if (user.googleSub && user.googleSub !== sub)
+        return error(
+          res,
+          409,
+          "Esta cuenta está vinculada a otra cuenta de Google.",
+        );
+
+      if (!user.googleSub) await linkGoogleSub(user.id, sub);
+
+      const token = randomBytes(32).toString("hex");
+
+      await insertSession(token, user.id);
+      setSessionCookies(req, res, token, 7 * 86400);
+
+      return json(res, 200, {
+        status: "authenticated",
+        user: publicUser(user),
+      });
+    }
+
+    // El alumno no está registrado aún
     const studentCode =
       typeof data.studentCode === "string"
         ? data.studentCode.trim().toUpperCase()
         : "";
     const career = typeof data.career === "string" ? data.career.trim() : "";
+
+    // Si aún no envía los datos de registro, indicamos que requiere completar registro
+    if (!studentCode || !career) {
+      return json(res, 200, {
+        status: "needs_registration",
+        email,
+        name:
+          name ||
+          email
+            .split("@")[0]
+            .replace(/[._-]/g, " ")
+            .split(" ")
+            .filter(Boolean)
+            .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(" "),
+      });
+    }
+
+    // Proceso de registro usual
+    const regName =
+      (typeof data.name === "string" ? data.name.trim() : "") || name;
     const birthDate =
       data.birthDate == null || data.birthDate === "" ? null : data.birthDate;
-
-    if (name.length < 2 || name.length > 80)
-      return error(res, 400, "Escribe tu nombre (2 a 80 caracteres).");
-
-    if (!validateEmail(email))
-      return error(res, 400, "Usa tu correo institucional @utec.edu.pe.");
 
     if (
       !/^(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})$/.test(
@@ -509,30 +854,22 @@ async function handleApi(req, res, url) {
         "Escribe una fecha de nacimiento válida que no sea futura.",
       );
 
-    if (password.length < 5 || password.length > 128)
-      return error(
-        res,
-        400,
-        "La contraseña debe tener entre 5 y 128 caracteres.",
-      );
-
-    if (await findUserByEmail(email))
-      return error(res, 409, "Ese correo ya tiene una cuenta.");
-    const user = {
+    user = {
       id: randomUUID(),
-      name,
+      name: regName,
       email,
       role: "consumer",
       studentCode,
       career,
       birthDate,
-      passwordHash: hashPassword(password),
+      passwordHash: hashPassword(randomBytes(16).toString("hex")),
+      googleSub: sub,
     };
 
     try {
       await insertUser(user);
     } catch (cause) {
-      if (String(cause.code).includes("CONSTRAINT_UNIQUE"))
+      if (String(cause?.code || cause?.message).includes("CONSTRAINT_UNIQUE")) {
         return error(
           res,
           409,
@@ -540,49 +877,24 @@ async function handleApi(req, res, url) {
             ? "Ese código de estudiante ya está registrado."
             : "Ese correo ya tiene una cuenta.",
         );
+      }
       throw cause;
     }
+
     const token = randomBytes(32).toString("hex");
 
     await insertSession(token, user.id);
-    res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
+    setSessionCookies(req, res, token, 7 * 86400);
 
-    return json(res, 201, { user: publicUser(user) });
-  }
-
-  if (url.pathname === "/api/auth/login") {
-    const email =
-      typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
-    const password = typeof data.password === "string" ? data.password : "";
-    const role = ["consumer", "kitchen", "admin"].includes(data.role)
-      ? data.role
-      : "consumer";
-    const user = await findUserByEmail(email);
-
-    if (!user || !verifyPassword(password, user.passwordHash))
-      return error(res, 401, "Correo o contraseña incorrectos.");
-
-    if (user.role !== role)
-      return error(
-        res,
-        403,
-        role === "kitchen"
-          ? "Esta cuenta no tiene acceso de cocina."
-          : role === "admin"
-            ? "Esta cuenta no tiene acceso de admin."
-            : "Esta cuenta usa otro acceso de Menúu.",
-      );
-    const token = randomBytes(32).toString("hex");
-
-    await insertSession(token, user.id);
-    res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
-
-    return json(res, 200, { user: publicUser(user) });
+    return json(res, 201, {
+      status: "authenticated",
+      user: publicUser(user),
+    });
   }
 
   if (url.pathname === "/api/auth/logout") {
     await removeSession(sessionToken(req));
-    res.setHeader("Set-Cookie", sessionCookie(req, "", 0));
+    setSessionCookies(req, res, "", 0);
 
     return json(res, 200, { ok: true });
   }
@@ -667,10 +979,13 @@ async function handleApi(req, res, url) {
   const cancelMatch = /^\/api\/orders\/([a-zA-Z0-9-]+)\/cancel$/.exec(
     url.pathname,
   );
+
   if (cancelMatch) {
     const user = await userFromSession(sessionToken(req));
+
     if (!user || user.role !== "consumer")
       return error(res, 401, "Inicia sesión con tu cuenta de estudiante.");
+
     return json(res, 200, await cancelOrder(user.id, cancelMatch[1]));
   }
   const reviewMatch = /^\/api\/orders\/([a-zA-Z0-9-]+)\/review$/.exec(
