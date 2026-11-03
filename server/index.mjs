@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +59,83 @@ const isDev = process.argv.includes("--dev");
 const port = Number(process.env.PORT || (isDev ? 5173 : 4173));
 let migrationPromise;
 let vite = null;
+const rateLimitWindowMs = 60_000;
+const rateLimitBuckets = new Map();
+const runningOnVercel = process.env.VERCEL === "1";
+
+function requestIp(req) {
+  if (runningOnVercel) {
+    const vercelIp = req.headers["x-real-ip"];
+
+    if (typeof vercelIp === "string" && vercelIp.trim()) return vercelIp.trim();
+  }
+
+  return req.socket.remoteAddress || "unknown";
+}
+
+function rateLimit(req, res, bucket, limit) {
+  const now = Date.now();
+  const key = `${bucket}:${requestIp(req)}`;
+  let entry = rateLimitBuckets.get(key);
+
+  if (rateLimitBuckets.size > 1_000) {
+    for (const [storedKey, storedEntry] of rateLimitBuckets)
+      if (storedEntry.expiresAt <= now) rateLimitBuckets.delete(storedKey);
+  }
+
+  if (!entry || entry.expiresAt <= now) {
+    entry = { count: 0, expiresAt: now + rateLimitWindowMs };
+    rateLimitBuckets.set(key, entry);
+  }
+
+  entry.count += 1;
+
+  const remaining = Math.max(0, limit - entry.count);
+
+  res.setHeader("X-RateLimit-Limit", limit);
+  res.setHeader("X-RateLimit-Remaining", remaining);
+
+  if (entry.count <= limit) return false;
+
+  res.setHeader(
+    "Retry-After",
+    Math.max(1, Math.ceil((entry.expiresAt - now) / 1000)),
+  );
+  error(res, 429, "Demasiadas solicitudes. Intenta nuevamente más tarde.");
+
+  return true;
+}
+
+function applyRateLimit(req, res, url) {
+  let bucket;
+  let limit;
+
+  if (url.pathname === "/api/auth/google") {
+    bucket = "auth-google";
+    limit = 10;
+  } else if (url.pathname === "/api/bookings") {
+    bucket = "bookings";
+    limit = 10;
+  } else if (
+    /^\/api\/orders\/[a-zA-Z0-9-]+\/(?:cancel|review)$/.test(url.pathname)
+  ) {
+    bucket = url.pathname.endsWith("/cancel") ? "order-cancel" : "order-review";
+    limit = 20;
+  } else if (url.pathname === "/api/catalog") {
+    bucket = url.searchParams.has("fresh") ? "catalog-fresh" : "catalog";
+    limit = url.searchParams.has("fresh") ? 10 : 60;
+  } else if (url.pathname === "/api/bootstrap") {
+    bucket = "bootstrap";
+    limit = 60;
+  } else if (url.pathname === "/api/session") {
+    bucket = "session";
+    limit = 120;
+  } else {
+    return false;
+  }
+
+  return rateLimit(req, res, bucket, limit);
+}
 
 function ensureMigrated() {
   if (!migrationPromise)
@@ -135,12 +212,19 @@ async function body(req) {
 }
 
 function sessionToken(req) {
-  const cookie = req.headers.cookie
+  const cookie = cookieValue(req, "menuu_session");
+
+  return cookie;
+}
+
+function cookieValue(req, name) {
+  const prefix = `${name}=`;
+
+  return req.headers.cookie
     ?.split(";")
     .map((part) => part.trim())
-    .find((part) => part.startsWith("menuu_session="));
-
-  return cookie?.slice("menuu_session=".length);
+    .find((part) => part.startsWith(prefix))
+    ?.slice(prefix.length);
 }
 
 function sessionCookie(req, token, age) {
@@ -149,6 +233,32 @@ function sessionCookie(req, token, age) {
     Boolean(req.socket.encrypted);
 
   return `menuu_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${age}${secure ? "; Secure" : ""}`;
+}
+
+function csrfCookie(req, token, age) {
+  const secure =
+    req.headers["x-forwarded-proto"] === "https" ||
+    Boolean(req.socket.encrypted);
+
+  return `menuu_csrf=${token}; SameSite=Lax; Path=/; Max-Age=${age}${secure ? "; Secure" : ""}`;
+}
+
+function setSessionCookies(req, res, token, age) {
+  res.setHeader("Set-Cookie", [
+    sessionCookie(req, token, age),
+    csrfCookie(req, age ? randomBytes(32).toString("hex") : "", age),
+  ]);
+}
+
+function validCsrf(req) {
+  const cookie = cookieValue(req, "menuu_csrf");
+  const header = req.headers["x-csrf-token"];
+
+  if (!cookie || typeof header !== "string") return false;
+  const expected = Buffer.from(cookie);
+  const actual = Buffer.from(header);
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 function sameOrigin(req) {
@@ -255,6 +365,8 @@ function visibleOrder(order, now = new Date()) {
 }
 
 async function handleApi(req, res, url) {
+  if (applyRateLimit(req, res, url)) return;
+
   if (req.method === "GET" && url.pathname === "/api/push/dispatch") {
     if (!validDispatchSecret(req.headers.authorization))
       return error(res, 401, "Acceso no permitido.");
@@ -269,7 +381,11 @@ async function handleApi(req, res, url) {
     url.pathname === "/api/push/subscription" ||
     url.pathname === "/api/push/unsubscribe"
   ) {
-    if (req.method !== "POST" || !sameOrigin(req))
+    if (
+      req.method !== "POST" ||
+      !sameOrigin(req) ||
+      (sessionToken(req) && !validCsrf(req))
+    )
       return error(res, 403, "Solicitud no permitida.");
     const user = await userFromSession(sessionToken(req));
 
@@ -345,7 +461,11 @@ async function handleApi(req, res, url) {
       );
     }
 
-    if (req.method !== "POST" || !sameOrigin(req))
+    if (
+      req.method !== "POST" ||
+      !sameOrigin(req) ||
+      (sessionToken(req) && !validCsrf(req))
+    )
       return error(res, 403, "Solicitud no permitida.");
     const data = await body(req);
 
@@ -405,7 +525,11 @@ async function handleApi(req, res, url) {
         ),
       );
 
-    if (req.method !== "POST" || !sameOrigin(req))
+    if (
+      req.method !== "POST" ||
+      !sameOrigin(req) ||
+      (sessionToken(req) && !validCsrf(req))
+    )
       return error(res, 403, "Solicitud no permitida.");
 
     if (url.pathname === "/api/kitchen/photo") {
@@ -477,6 +601,12 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/session") {
     const user = await userFromSession(sessionToken(req));
 
+    if (!cookieValue(req, "menuu_csrf"))
+      res.setHeader(
+        "Set-Cookie",
+        csrfCookie(req, randomBytes(32).toString("hex"), 7 * 86400),
+      );
+
     return json(res, 200, { user: publicUser(user), careers });
   }
 
@@ -521,6 +651,9 @@ async function handleApi(req, res, url) {
   if (req.method !== "POST") return error(res, 404, "Ruta no encontrada.");
 
   if (!sameOrigin(req)) return error(res, 403, "Origen no permitido.");
+
+  if (sessionToken(req) && !validCsrf(req))
+    return error(res, 403, "Token CSRF inválido.");
   const data = await body(req);
 
   if (url.pathname === "/api/auth/register") {
@@ -562,7 +695,7 @@ async function handleApi(req, res, url) {
     const token = randomBytes(32).toString("hex");
 
     await insertSession(token, user.id);
-    res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
+    setSessionCookies(req, res, token, 7 * 86400);
 
     return json(res, 200, { user: publicUser(user) });
   }
@@ -613,14 +746,18 @@ async function handleApi(req, res, url) {
         );
 
       if (user.googleSub && user.googleSub !== sub)
-        return error(res, 409, "Esta cuenta está vinculada a otra cuenta de Google.");
+        return error(
+          res,
+          409,
+          "Esta cuenta está vinculada a otra cuenta de Google.",
+        );
 
       if (!user.googleSub) await linkGoogleSub(user.id, sub);
 
       const token = randomBytes(32).toString("hex");
 
       await insertSession(token, user.id);
-      res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
+      setSessionCookies(req, res, token, 7 * 86400);
 
       return json(res, 200, {
         status: "authenticated",
@@ -709,7 +846,7 @@ async function handleApi(req, res, url) {
     const token = randomBytes(32).toString("hex");
 
     await insertSession(token, user.id);
-    res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
+    setSessionCookies(req, res, token, 7 * 86400);
 
     return json(res, 201, {
       status: "authenticated",
@@ -719,7 +856,7 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === "/api/auth/logout") {
     await removeSession(sessionToken(req));
-    res.setHeader("Set-Cookie", sessionCookie(req, "", 0));
+    setSessionCookies(req, res, "", 0);
 
     return json(res, 200, { ok: true });
   }

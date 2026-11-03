@@ -301,13 +301,21 @@ const offerPrice = (offer: Offering, choices: SelectedChoices) =>
   );
 
 async function api<T>(path: string, data?: unknown): Promise<T> {
+  const csrf = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith("menuu_csrf="))
+    ?.slice("menuu_csrf=".length);
   const response = await fetch(
     path,
     data === undefined
       ? undefined
       : {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+          },
           body: JSON.stringify(data),
         },
   );

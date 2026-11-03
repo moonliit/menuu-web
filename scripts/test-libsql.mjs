@@ -406,7 +406,10 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       });
 
       assert.equal(bootstrap.status, 200);
-      assert.equal((await bootstrap.json()).user.email, "temporal0@utec.edu.pe");
+      assert.equal(
+        (await bootstrap.json()).user.email,
+        "temporal0@utec.edu.pe",
+      );
       // Las requests sin un credential real de Google se rechazan.
       const googleNew = await fetch(`${base}/api/auth/google`, {
         method: "POST",
@@ -418,6 +421,27 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       });
 
       assert.equal(googleNew.status, 401);
+      for (let attempt = 0; attempt < 9; attempt += 1) {
+        const response = await fetch(`${base}/api/auth/google`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
+        });
+
+        assert.equal(response.status, 401);
+      }
+      const rateLimitedGoogle = await fetch(`${base}/api/auth/google`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+
+      assert.equal(rateLimitedGoogle.status, 429);
+      assert.ok(Number(rateLimitedGoogle.headers.get("retry-after")) >= 1);
 
       const sessionResponse = await fetch(`${base}/api/session`, {
         headers: { Cookie: cookie },
@@ -522,7 +546,8 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Cookie: `menuu_session=${preToken}`,
+          Cookie: `menuu_session=${preToken}; menuu_csrf=test-csrf`,
+          "X-CSRF-Token": "test-csrf",
         },
         body: JSON.stringify({
           name: "Estudiante PRE",
@@ -536,6 +561,20 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         (await preUpdated.json()).user.studentCode,
         "1234PRE56123456",
       );
+      const csrfRejected = await fetch(`${base}/api/account/profile`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `menuu_session=${preToken}; menuu_csrf=test-csrf`,
+        },
+        body: JSON.stringify({
+          name: "Sin CSRF",
+          studentCode: "1234PRE56123456",
+          career: "Ciencia de la Computación",
+        }),
+      });
+
+      assert.equal(csrfRejected.status, 403);
       const invalidPre = await fetch(`${base}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -560,10 +599,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       const adminToken = "b".repeat(64);
 
       await insertSession(adminToken, "admin-actor");
-      const adminCookie = `menuu_session=${adminToken}`;
+      const adminCookie = `menuu_session=${adminToken}; menuu_csrf=test-csrf`;
       const adminHeaders = {
         Cookie: adminCookie,
         "Content-Type": "application/json",
+        "X-CSRF-Token": "test-csrf",
       };
       const adminLogin = await fetch(`${base}/api/auth/login`, {
         method: "POST",
