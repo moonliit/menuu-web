@@ -1,4 +1,4 @@
-﻿import {
+import {
   useEffect,
   useMemo,
   useRef,
@@ -20,6 +20,7 @@ import {
   Search,
   SlidersHorizontal,
   Star,
+  ShieldCheck,
   UtensilsCrossed,
   UserRound,
   X,
@@ -32,6 +33,7 @@ import {
   BrandCartIcon,
   BrandClockIcon,
   BrandDishIcon,
+  BrandGoogleIcon,
   BrandLocationIcon,
   BrandLockedOrdersIcon,
   BrandLogoutIcon,
@@ -608,105 +610,173 @@ function CareerPicker({
 }
 
 function AuthPanel({
-  careers,
+  careers = [],
   message,
   onAuthenticated,
 }: {
-  careers: string[];
+  careers?: string[];
   message: string;
   onAuthenticated: () => Promise<void>;
 }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [registerStep, setRegisterStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<"google" | "register">("google");
+  const [googleEmail, setGoogleEmail] = useState("");
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [career, setCareer] = useState("");
-  const [password, setPassword] = useState("");
   const [birthDate, setBirthDate] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [passwordWarning, setPasswordWarning] = useState(false);
   const [careerInvalid, setCareerInvalid] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [nameInput, setNameInput] = useState("");
   const careerTriggerRef = useRef<HTMLButtonElement>(null);
-  const emailRef = useRef<HTMLInputElement>(null);
-  const passwordRef = useRef<HTMLInputElement>(null);
+  const promptInputRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
-    if (mode !== "register") return;
-    (registerStep === 1 ? emailRef : nameRef).current?.focus();
-  }, [mode, registerStep]);
-  function invalid(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const field = event.target as HTMLInputElement;
-    if (field !== event.currentTarget.querySelector("input:invalid")) return;
-    setError(
-      field === emailRef.current
-        ? field.validity.valueMissing
-          ? "Ingresa tu correo institucional."
-          : "Usa un correo @utec.edu.pe."
-        : field === passwordRef.current
-          ? "Ingresa tu contraseña."
-          : field === nameRef.current
-            ? "Escribe tu nombre completo."
-            : field.inputMode === "numeric"
-              ? "El código de estudiante debe tener 9 dígitos."
-              : "Revisa este campo.",
-    );
-  }
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (mode === "register" && registerStep === 1) {
-      if (password.length < 5) {
-        setPasswordWarning(true);
-        passwordRef.current?.focus();
-        return;
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) return;
+
+    const scriptId = "google-jssdk";
+    const initGsi = () => {
+      const g = (
+        window as unknown as {
+          google?: {
+            accounts?: { id?: { initialize: (config: unknown) => void } };
+          };
+        }
+      ).google;
+      if (g?.accounts?.id) {
+        g.accounts.id.initialize({
+          client_id: clientId,
+          callback: async (response: { credential?: string }) => {
+            if (response.credential) {
+              await authenticateWithGoogle({ credential: response.credential });
+            }
+          },
+          hosted_domain: "utec.edu.pe",
+        });
       }
-      setPasswordWarning(false);
-      setRegisterStep(2);
-      setError("");
-      return;
+    };
+
+    if (!document.getElementById(scriptId)) {
+      const script = document.createElement("script");
+      script.id = scriptId;
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = initGsi;
+      document.body.appendChild(script);
+    } else {
+      initGsi();
     }
-    if (mode === "register" && !career) {
-      setCareerInvalid(true);
-      setError("Selecciona tu carrera.");
-      careerTriggerRef.current?.focus();
-      return;
+  }, []);
+
+  useEffect(() => {
+    if (showPrompt) {
+      promptInputRef.current?.focus();
     }
+  }, [showPrompt]);
+
+  useEffect(() => {
+    if (step === "register") {
+      nameRef.current?.focus();
+    }
+  }, [step]);
+
+  async function authenticateWithGoogle(payload: {
+    credential?: string;
+    email?: string;
+    name?: string;
+    studentCode?: string;
+    career?: string;
+    birthDate?: string | null;
+  }) {
     setBusy(true);
     setError("");
     try {
-      await api(
-        mode === "login" ? "/api/auth/login" : "/api/auth/register",
-        mode === "login"
-          ? { email, password, role: "consumer" }
-          : {
-              name,
-              email,
-              password,
-              birthDate: birthDate || null,
-              studentCode,
-              career,
-            },
-      );
-      await onAuthenticated();
+      const res = await api<{
+        status: "authenticated" | "needs_registration";
+        email?: string;
+        name?: string;
+        user?: User;
+      }>("/api/auth/google", payload);
+
+      if (res.status === "needs_registration") {
+        setGoogleEmail(res.email || payload.email || "");
+        setName(res.name || payload.name || "");
+        setStep("register");
+        setShowPrompt(false);
+      } else {
+        await onAuthenticated();
+        setShowPrompt(false);
+      }
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "No pudimos continuar.",
+        cause instanceof Error
+          ? cause.message
+          : "No pudimos acceder con Google.",
       );
     } finally {
       setBusy(false);
     }
   }
-  const stepTitles = ["Tu acceso", "Tus datos UTEC"];
+
+  function handleGoogleClick() {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const g = (
+      window as unknown as {
+        google?: { accounts?: { id?: { prompt: () => void } } };
+      }
+    ).google;
+    if (clientId && g?.accounts?.id) {
+      g.accounts.id.prompt();
+    } else {
+      setShowPrompt(true);
+    }
+  }
+
+  function handlePromptSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const cleanEmail = emailInput.trim().toLowerCase();
+    if (!cleanEmail.endsWith("@utec.edu.pe")) {
+      setError("Usa un correo institucional que termine en @utec.edu.pe");
+      return;
+    }
+    authenticateWithGoogle({
+      email: cleanEmail,
+      name: nameInput.trim() || undefined,
+    });
+  }
+
+  async function handleRegisterSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!career) {
+      setCareerInvalid(true);
+      setError("Selecciona tu carrera.");
+      careerTriggerRef.current?.focus();
+      return;
+    }
+    await authenticateWithGoogle({
+      email: googleEmail,
+      name: name.trim(),
+      studentCode: studentCode.trim(),
+      career,
+      birthDate: birthDate || null,
+    });
+  }
+
   return (
     <div
-      className={`auth-layout${mode === "register" && registerStep === 2 ? " auth-layout-details" : ""}`}
+      className={`auth-layout${step === "register" ? " auth-layout-details" : ""}`}
     >
       <div className="auth-side">
         <div className="page-heading">
-          <span className="eyebrow">TU ESPACIO</span>
-          <h1>Mi cuenta</h1>
+          <span className="eyebrow">
+            {step === "register" ? "COMPLETA TU REGISTRO" : "TU ESPACIO"}
+          </span>
+          <h1>{step === "register" ? "Tus datos UTEC" : "Mi cuenta"}</h1>
         </div>
         {message && (
           <p className="auth-message" role="status">
@@ -715,182 +785,136 @@ function AuthPanel({
         )}
       </div>
       <div className="auth-card">
-        <div className="auth-tabs" role="tablist" aria-label="Acceso">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "login"}
-            className={mode === "login" ? "active" : ""}
-            onClick={() => {
-              setMode("login");
-              setRegisterStep(1);
-              setError("");
-              setPasswordWarning(false);
-              setCareerInvalid(false);
-            }}
-          >
-            Iniciar sesión
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "register"}
-            className={mode === "register" ? "active" : ""}
-            onClick={() => {
-              setMode("register");
-              setRegisterStep(1);
-              setError("");
-              setPasswordWarning(false);
-              setCareerInvalid(false);
-            }}
-          >
-            Crear cuenta
-          </button>
-        </div>
-        {mode === "register" && (
-          <span className="visually-hidden" aria-live="polite">
-            Paso {registerStep} de 2: {stepTitles[registerStep - 1]}
-          </span>
-        )}
-        <form onSubmit={submit} onInvalidCapture={invalid}>
-          {(mode === "login" || registerStep === 1) && (
-            <>
-              <label>
-                Correo UTEC
-                <input
-                  ref={emailRef}
-                  type="email"
-                  autoComplete="email"
-                  required
-                  pattern="[^\s@]+@utec\.edu\.pe"
-                  title="Usa un correo @utec.edu.pe"
-                  value={email}
-                  onChange={(event) => {
-                    setEmail(event.target.value);
-                    setError("");
-                  }}
-                  placeholder="tu.nombre@utec.edu.pe"
-                />
-              </label>
-              <label>
-                Contraseña
-                <input
-                  ref={passwordRef}
-                  type="password"
-                  autoComplete={
-                    mode === "login" ? "current-password" : "new-password"
-                  }
-                  maxLength={128}
-                  required={mode === "login"}
-                  aria-required={mode === "register" || undefined}
-                  aria-invalid={
-                    (mode === "register" && passwordWarning) || undefined
-                  }
-                  value={password}
-                  onChange={(event) => {
-                    setPassword(event.target.value);
-                    setPasswordWarning(false);
-                    setError("");
-                  }}
-                  placeholder={
-                    mode === "register"
-                      ? "Mínimo 5 caracteres"
-                      : "Tu contraseña"
-                  }
-                />
-              </label>
-            </>
-          )}
-          {mode === "register" && registerStep === 2 && (
-            <div className="auth-details-fields">
-              <label>
-                Nombre completo
-                <input
-                  ref={nameRef}
-                  type="text"
-                  autoComplete="name"
-                  minLength={2}
-                  maxLength={80}
-                  required
-                  value={name}
-                  onChange={(event) => {
-                    setName(event.target.value);
-                    setError("");
-                  }}
-                  placeholder="¿Cómo te llamas?"
-                />
-              </label>
-              <label>
-                Código de estudiante
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  minLength={9}
-                  maxLength={9}
-                  pattern="[0-9]{9}"
-                  title="Usa los 9 dígitos de tu código"
-                  required
-                  value={studentCode}
-                  onChange={(event) => {
-                    setStudentCode(event.target.value.replace(/\D/g, ""));
-                    setError("");
-                  }}
-                  placeholder="9 dígitos"
-                  spellCheck={false}
-                />
-              </label>
-              <CareerPicker
-                careers={careers}
-                value={career}
-                onChange={(choice) => {
-                  setCareer(choice);
-                  setCareerInvalid(false);
-                  setError("");
-                }}
-                invalid={careerInvalid}
-                triggerRef={careerTriggerRef}
-              />
-              <BirthDatePicker
-                value={birthDate}
-                onChange={setBirthDate}
-                maxDate={limaToday()}
-              />
+        {step === "google" ? (
+          <div className="auth-google-wrapper">
+            <div className="auth-card-badge">
+              <span className="auth-badge-dot" />
+              <span>Acceso institucional UTEC</span>
             </div>
-          )}
-          <div className="auth-actions">
-            {mode === "register" && registerStep === 2 && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  setRegisterStep(1);
-                  setCareerInvalid(false);
-                  setError("");
-                }}
-              >
-                Volver
-              </Button>
-            )}
-            <Button type="submit" disabled={busy}>
+
+            <div className="auth-google-header">
+              <h2 className="auth-google-title">Acceso único con Google</h2>
+              <p className="auth-google-desc">
+                Ingresa con tu cuenta de Google <strong>@utec.edu.pe</strong>{" "}
+                para acceder a Menúu.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="google-auth-button"
+              onClick={handleGoogleClick}
+              disabled={busy}
+            >
+              <BrandGoogleIcon size={22} />
               <span>
-                {busy
-                  ? "Un momento…"
-                  : mode === "login"
-                    ? "Entrar a Menúu"
-                    : registerStep === 2
-                      ? "Crear mi cuenta"
-                      : "Continuar"}
+                {busy ? "Verificando cuenta…" : "Continuar con Google"}
               </span>
-              {mode === "register" && registerStep === 1 && !busy && (
-                <span className="auth-button-step" aria-label="Paso 1 de 2">
-                  1/2
-                </span>
-              )}
-              <ArrowRight size={18} aria-hidden="true" />
-            </Button>
+            </button>
+
+            <div className="auth-security-notice">
+              <ShieldCheck size={20} aria-hidden="true" />
+              <div>
+                <strong>Acceso exclusivo para la comunidad UTEC.</strong>
+                <p>
+                  Si ya tienes una cuenta registrada entrarás de inmediato; de
+                  lo contrario, completarás tus datos de estudiante para
+                  crearla.
+                </p>
+              </div>
+            </div>
           </div>
-        </form>
+        ) : (
+          <div className="auth-register-wrapper">
+            <div className="auth-register-header">
+              <div className="auth-google-account-badge">
+                <BrandGoogleIcon size={16} />
+                <span>{googleEmail}</span>
+              </div>
+              <p className="auth-google-desc">
+                Tu cuenta Google está verificada. Completa tus datos de
+                estudiante para finalizar tu registro.
+              </p>
+            </div>
+
+            <form onSubmit={handleRegisterSubmit}>
+              <div className="auth-details-fields">
+                <label>
+                  Nombre completo
+                  <input
+                    ref={nameRef}
+                    type="text"
+                    autoComplete="name"
+                    minLength={2}
+                    maxLength={80}
+                    required
+                    value={name}
+                    onChange={(event) => {
+                      setName(event.target.value);
+                      setError("");
+                    }}
+                    placeholder="¿Cómo te llamas?"
+                  />
+                </label>
+                <label>
+                  Código de estudiante
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    minLength={9}
+                    maxLength={9}
+                    pattern="[0-9]{9}"
+                    title="Usa los 9 dígitos de tu código"
+                    required
+                    value={studentCode}
+                    onChange={(event) => {
+                      setStudentCode(event.target.value.replace(/\D/g, ""));
+                      setError("");
+                    }}
+                    placeholder="9 dígitos"
+                    spellCheck={false}
+                  />
+                </label>
+                <CareerPicker
+                  careers={careers}
+                  value={career}
+                  onChange={(choice) => {
+                    setCareer(choice);
+                    setCareerInvalid(false);
+                    setError("");
+                  }}
+                  invalid={careerInvalid}
+                  triggerRef={careerTriggerRef}
+                />
+                <BirthDatePicker
+                  value={birthDate}
+                  onChange={setBirthDate}
+                  maxDate={limaToday()}
+                />
+              </div>
+
+              <div className="auth-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setStep("google");
+                    setError("");
+                    setCareerInvalid(false);
+                  }}
+                  disabled={busy}
+                >
+                  Volver
+                </Button>
+                <Button type="submit" disabled={busy}>
+                  <span>{busy ? "Creando cuenta…" : "Crear mi cuenta"}</span>
+                  <ArrowRight size={18} aria-hidden="true" />
+                </Button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
       <div className="auth-role-link">
         <span>¿Tienes una cocina?</span>
@@ -908,19 +932,115 @@ function AuthPanel({
         />
         <figcaption>Imagen referencial</figcaption>
       </figure>
-      {(passwordWarning || error) && (
-        <AuthErrorToast
-          message={
-            passwordWarning
-              ? "La contraseña debe tener al menos 5 caracteres."
-              : error
-          }
-          onClose={() => {
-            setPasswordWarning(false);
-            setError("");
-          }}
-        />
+
+      {showPrompt && (
+        <div
+          className="google-prompt-backdrop"
+          onClick={() => !busy && setShowPrompt(false)}
+        >
+          <div
+            className="google-prompt-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="google-dialog-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="google-dialog-header">
+              <div className="google-dialog-brand">
+                <BrandGoogleIcon size={26} />
+                <div className="google-dialog-titles">
+                  <h3 id="google-dialog-title">Acceder con Google</h3>
+                  <span>Cuenta institucional UTEC</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="google-dialog-close"
+                onClick={() => setShowPrompt(false)}
+                aria-label="Cerrar diálogo"
+                disabled={busy}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handlePromptSubmit} className="google-dialog-form">
+              <label>
+                Correo institucional (@utec.edu.pe)
+                <input
+                  ref={promptInputRef}
+                  type="email"
+                  required
+                  pattern="[^\s@]+@utec\.edu\.pe"
+                  title="Usa un correo @utec.edu.pe"
+                  placeholder="tu.nombre@utec.edu.pe"
+                  value={emailInput}
+                  onChange={(e) => {
+                    setEmailInput(e.target.value);
+                    setError("");
+                  }}
+                  autoFocus
+                />
+              </label>
+
+              <label>
+                Nombre completo (opcional)
+                <input
+                  type="text"
+                  placeholder="Tu nombre y apellido"
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                />
+              </label>
+
+              <div className="google-quick-accounts">
+                <span className="google-quick-label">
+                  Cuentas rápidas de prueba:
+                </span>
+                <div className="google-quick-chips">
+                  <button
+                    type="button"
+                    className="google-chip"
+                    onClick={() => {
+                      setEmailInput("alumno@utec.edu.pe");
+                      setNameInput("Alumno UTEC");
+                    }}
+                  >
+                    alumno@utec.edu.pe
+                  </button>
+                  <button
+                    type="button"
+                    className="google-chip"
+                    onClick={() => {
+                      setEmailInput("estudiante.demo@utec.edu.pe");
+                      setNameInput("Estudiante Demo");
+                    }}
+                  >
+                    estudiante.demo@utec.edu.pe
+                  </button>
+                </div>
+              </div>
+
+              <div className="google-dialog-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setShowPrompt(false)}
+                  disabled={busy}
+                >
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={busy}>
+                  <span>{busy ? "Accediendo…" : "Continuar con Google"}</span>
+                  <ArrowRight size={18} />
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
+
+      {error && <AuthErrorToast message={error} onClose={() => setError("")} />}
     </div>
   );
 }

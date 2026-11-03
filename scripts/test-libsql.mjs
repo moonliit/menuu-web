@@ -216,6 +216,68 @@ if (!process.env.MENUU_TEST_DB_PATH) {
 
       assert.equal(bootstrap.status, 200);
       assert.equal((await bootstrap.json()).user.email, "nueva@utec.edu.pe");
+
+      // Prueba de acceso con Google para nuevo estudiante (requiere completar registro)
+      const googleNew = await fetch(`${base}/api/auth/google`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "alumno.google@utec.edu.pe",
+          name: "Alumno Google",
+        }),
+      });
+
+      assert.equal(googleNew.status, 200);
+      const googleNewRes = await googleNew.json();
+
+      assert.equal(googleNewRes.status, "needs_registration");
+      assert.equal(googleNewRes.email, "alumno.google@utec.edu.pe");
+
+      // El nuevo estudiante completa su proceso de registro usual
+      const googleRegister = await fetch(`${base}/api/auth/google`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "alumno.google@utec.edu.pe",
+          name: "Alumno Google",
+          studentCode: "202610999",
+          career: "Ciencia de la Computación",
+          birthDate: null,
+        }),
+      });
+
+      assert.equal(googleRegister.status, 201);
+      const googleRegRes = await googleRegister.json();
+
+      assert.equal(googleRegRes.status, "authenticated");
+      assert.equal(googleRegRes.user.email, "alumno.google@utec.edu.pe");
+      assert.equal(googleRegRes.user.studentCode, "202610999");
+
+      // Prueba de acceso con Google para estudiante ya existente (ingresa directo)
+      const googleExisting = await fetch(`${base}/api/auth/google`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "alumno.google@utec.edu.pe",
+        }),
+      });
+
+      assert.equal(googleExisting.status, 200);
+      const googleExistRes = await googleExisting.json();
+
+      assert.equal(googleExistRes.status, "authenticated");
+      assert.equal(googleExistRes.user.email, "alumno.google@utec.edu.pe");
+
+      // Rechazo de correo no institucional
+      const googleInvalid = await fetch(`${base}/api/auth/google`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "usuario@gmail.com",
+        }),
+      });
+
+      assert.equal(googleInvalid.status, 400);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

@@ -1,11 +1,11 @@
-﻿import { createServer } from "node:http";
+import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deliveryMoment } from "./catalog.mjs";
 import { careers } from "./careers.mjs";
-import { closeDb } from "./db.mjs";
+import { closeDb, getDb } from "./db.mjs";
 import {
   createBooking,
   findUserByEmail,
@@ -380,6 +380,145 @@ async function handleApi(req, res, url) {
     res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
 
     return json(res, 200, { user: publicUser(user) });
+  }
+
+  if (url.pathname === "/api/auth/google") {
+    let email = "";
+    let name = "";
+
+    if (typeof data.credential === "string" && data.credential) {
+      try {
+        const parts = data.credential.split(".");
+
+        if (parts.length === 3) {
+          const payload = JSON.parse(
+            Buffer.from(parts[1], "base64url").toString("utf8"),
+          );
+
+          email =
+            typeof payload.email === "string"
+              ? payload.email.trim().toLowerCase()
+              : "";
+          name = typeof payload.name === "string" ? payload.name.trim() : "";
+        }
+      } catch {
+        return error(res, 400, "Token de Google inválido.");
+      }
+    } else {
+      email =
+        typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
+      name = typeof data.name === "string" ? data.name.trim() : "";
+    }
+
+    if (!email) return error(res, 400, "Indica tu cuenta de Google.");
+
+    if (!validateEmail(email))
+      return error(
+        res,
+        400,
+        "Solo puedes acceder con una cuenta institucional de Google (@utec.edu.pe).",
+      );
+
+    let user = await findUserByEmail(email);
+
+    if (user) {
+      if (user.role !== "consumer")
+        return error(
+          res,
+          403,
+          "Esta cuenta pertenece a una cocina. Usa el acceso de cocinas.",
+        );
+
+      const token = randomBytes(32).toString("hex");
+
+      await insertSession(token, user.id);
+      res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
+
+      return json(res, 200, {
+        status: "authenticated",
+        user: publicUser(user),
+      });
+    }
+
+    // El alumno no está registrado aún
+    const studentCode =
+      typeof data.studentCode === "string" ? data.studentCode.trim() : "";
+    const career = typeof data.career === "string" ? data.career.trim() : "";
+
+    // Si aún no envía los datos de registro, indicamos que requiere completar registro
+    if (!studentCode || !career) {
+      return json(res, 200, {
+        status: "needs_registration",
+        email,
+        name:
+          name ||
+          email
+            .split("@")[0]
+            .replace(/[._-]/g, " ")
+            .split(" ")
+            .filter(Boolean)
+            .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(" "),
+      });
+    }
+
+    // Proceso de registro usual
+    const regName =
+      (typeof data.name === "string" ? data.name.trim() : "") || name;
+    const birthDate =
+      data.birthDate == null || data.birthDate === "" ? null : data.birthDate;
+
+    if (regName.length < 2 || regName.length > 80)
+      return error(res, 400, "Escribe tu nombre completo (2 a 80 caracteres).");
+
+    if (!/^[0-9]{9}$/.test(studentCode))
+      return error(res, 400, "El código de estudiante debe tener 9 dígitos.");
+
+    if (!careers.includes(career))
+      return error(res, 400, "Selecciona una carrera de la lista.");
+
+    if (!validBirthDate(birthDate))
+      return error(
+        res,
+        400,
+        "Escribe una fecha de nacimiento válida que no sea futura.",
+      );
+
+    user = {
+      id: randomUUID(),
+      name: regName,
+      email,
+      role: "consumer",
+      studentCode,
+      career,
+      birthDate,
+      passwordHash: hashPassword(randomBytes(16).toString("hex")),
+    };
+
+    try {
+      await insertUser(user);
+    } catch (cause) {
+      if (String(cause?.code || cause?.message).includes("CONSTRAINT_UNIQUE")) {
+        return error(
+          res,
+          409,
+          /student_code/i.test(cause.message)
+            ? "Ese código de estudiante ya está registrado."
+            : "Ese correo ya tiene una cuenta.",
+        );
+      }
+      throw cause;
+    }
+
+    const token = randomBytes(32).toString("hex");
+
+    await insertSession(token, user.id);
+    res.setHeader("Set-Cookie", sessionCookie(req, token, 7 * 86400));
+
+    return json(res, 201, {
+      status: "authenticated",
+      user: publicUser(user),
+    });
   }
 
   if (url.pathname === "/api/auth/logout") {
