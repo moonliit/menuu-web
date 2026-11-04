@@ -3258,9 +3258,10 @@ type ReviewableOrder = {
   items: { id: string; name: string; imageUrl: string; quantity: number; rating?: number | null }[];
 };
 
-function KitchenReviewForm({ review, onSaved }: {
+function KitchenReviewForm({ review, onSaved, inPrompt = false }: {
   review: ReviewableOrder;
   onSaved: () => Promise<void>;
+  inPrompt?: boolean;
 }) {
   const [foodRatings, setFoodRatings] = useState<Record<string, number>>({});
   const [comment, setComment] = useState("");
@@ -3285,8 +3286,7 @@ function KitchenReviewForm({ review, onSaved }: {
   }
 
   return <form className="review-form" onSubmit={submit}>
-    <h3>¿Qué tal estuvo la sazón?</h3>
-    <p>Califica cada comida de tu pedido {review.code}. El promedio se reflejará en la puntuación de {review.kitchenName}.</p>
+    {!inPrompt && <><h3>¿Qué tal estuvo la sazón?</h3><p>El promedio se reflejará en la puntuación de {review.kitchenName}.</p></>}
     <div className="review-ordered-items">
       {review.items.map((item) => <div key={item.id}>
         <img src={item.imageUrl} alt="" />
@@ -3298,7 +3298,7 @@ function KitchenReviewForm({ review, onSaved }: {
       <textarea value={comment} maxLength={100} rows={3} required disabled={saving} onChange={(event) => setComment(event.target.value)} placeholder="Cuéntanos qué te gustó de su sazón" />
       <small>{comment.length}/100 caracteres</small>
     </label>
-    <p className="review-public-note">Tu comentario, las puntuaciones y los platos de este pedido aparecerán sin tu nombre en la página de la cocina.</p>
+    <p className="review-public-note">Tu comentario será público. El lenguaje ofensivo podrá sancionarse con el bloqueo de la reseña.</p>
     {error && <p className="form-error" role="alert">{error}</p>}
     <Button type="submit" disabled={saving || review.items.some((item) => !foodRatings[item.id]) || !comment.trim()}>{saving ? "Guardando…" : "Enviar reseña"} <ArrowRight size={18} /></Button>
   </form>;
@@ -3312,11 +3312,13 @@ function ReviewPromptDialog({ review, onClose, onSaved }: {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { if (!ref.current?.open) ref.current?.showModal(); }, []);
   return createPortal(<dialog ref={ref} className="review-prompt-dialog" aria-labelledby="review-prompt-title" onClose={onClose}>
-    <button type="button" className="icon-button review-prompt-close" onClick={() => ref.current?.close()} aria-label="Cerrar reseña"><X size={20} /></button>
-    <span className="eyebrow">TU PEDIDO FUE ENTREGADO</span>
-    <h2 id="review-prompt-title">¿Cómo estuvo tu break?</h2>
-    <p>Tu opinión ayuda a otros estudiantes a elegir su próxima comida.</p>
-    <KitchenReviewForm review={review} onSaved={onSaved} />
+    <div className="review-prompt-scroll dialog-scroll">
+      <button type="button" className="icon-button review-prompt-close" onClick={() => ref.current?.close()} aria-label="Cerrar reseña"><X size={20} /></button>
+      <span className="eyebrow">TU PEDIDO FUE ENTREGADO</span>
+      <h2 id="review-prompt-title">¿Qué tal estuvo la sazón?</h2>
+      <p>El promedio se reflejará en la puntuación de {review.kitchenName}.</p>
+      <KitchenReviewForm review={review} onSaved={onSaved} inPrompt />
+    </div>
   </dialog>, document.body);
 }
 

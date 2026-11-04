@@ -3097,6 +3097,15 @@ p {
   scrollbar-color: var(--color-scroll-thumb) var(--color-scroll-track);
   scrollbar-width: thin;
 }
+.review-prompt-dialog {
+  padding: 0;
+  overflow: hidden;
+}
+.review-prompt-scroll {
+  max-height: min(calc(85dvh - 2px), 738px);
+  padding: 30px;
+  border-radius: 21px;
+}
 .review-prompt-dialog::backdrop,
 .kitchen-comments-dialog::backdrop {
   background: rgb(11 35 24 / 56%);
@@ -3114,7 +3123,9 @@ p {
   float: right;
 }
 .review-prompt-dialog .review-form {
-  margin-top: 18px;
+  margin-top: 16px;
+  padding-top: 0;
+  border-top: 0;
 }
 .kitchen-menu-heading {
   display: flex;
@@ -3200,8 +3211,10 @@ p {
     margin-top: 18px;
     text-align: left;
   }
-  .review-prompt-dialog,
   .kitchen-comments-dialog {
+    padding: 22px;
+  }
+  .review-prompt-scroll {
     padding: 22px;
   }
 }
