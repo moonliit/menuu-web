@@ -1086,6 +1086,11 @@
   --reservation-bg: var(--color-status-delivered-bg);
   --reservation-ink: var(--color-brand);
 }
+.km-reservation-fridge {
+  --reservation-accent: var(--color-brand);
+  --reservation-bg: #e6f1ef;
+  --reservation-ink: var(--color-brand);
+}
 .km-reservation-cancelled {
   --reservation-accent: var(--color-error);
   --reservation-bg: var(--color-status-cancelled-bg);
@@ -1856,6 +1861,28 @@
 .km-payment-dialog p {
   margin-bottom: 19px;
   line-height: 1.55;
+}
+.km-fridge-upload {
+  display: grid;
+  gap: 7px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px dashed var(--color-border);
+  border-radius: 16px;
+  background: var(--color-surface);
+}
+.km-fridge-upload-dragging {
+  border-color: var(--color-brand);
+  background: var(--color-orange-soft);
+}
+.km-fridge-upload strong {
+  font-weight: 600;
+}
+.km-fridge-upload span,
+.km-fridge-upload small {
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: 13px;
 }
 .km-delivery-time-field {
   display: grid;

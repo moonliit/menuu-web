@@ -18,6 +18,8 @@ import {
   ImagePlus,
   Minus,
   Plus,
+  Refrigerator,
+  Phone,
   Search,
   SlidersHorizontal,
   Star,
@@ -83,6 +85,14 @@ type OrdersPage = {
   total: number;
   limit: number;
   offset: number;
+};
+type FridgeNotice = {
+  orderId: string;
+  code: string;
+  kitchenName: string;
+  date: string;
+  phone: string;
+  photoUrl: string | null;
 };
 
 type Page =
@@ -1606,6 +1616,7 @@ export default function App() {
   const [bookingError, setBookingError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [reviewPrompt, setReviewPrompt] = useState<ReviewableOrder | null>(null);
+  const [fridgeNotices, setFridgeNotices] = useState<FridgeNotice[] | null>(null);
   const [paymentPrompt, setPaymentPrompt] = useState<Order | null>(null);
   const [commentsKitchen, setCommentsKitchen] = useState<Kitchen | null>(null);
 
@@ -1746,16 +1757,23 @@ export default function App() {
   useEffect(() => {
     if (state?.user?.role !== "consumer") {
       setReviewPrompt(null);
+      setFridgeNotices(null);
       return;
     }
     let cancelled = false;
-    api<{ review: ReviewableOrder | null }>("/api/reviews/pending")
-      .then(({ review }) => {
+    async function loadPrompts() {
+      try {
+        const { notices } = await api<{ notices: FridgeNotice[] }>("/api/fridge/pending");
+        if (cancelled) return;
+        if (notices.length) setFridgeNotices(notices);
+      } catch { /* Los pedidos siguen disponibles en su sección. */ }
+      try {
+        const { review } = await api<{ review: ReviewableOrder | null }>("/api/reviews/pending");
         if (!review || cancelled) return;
         setReviewPrompt(review);
-        api(`/api/orders/${review.orderId}/review-prompt-seen`, {}).catch(() => {});
-      })
-      .catch(() => {});
+      } catch { /* La reseña sigue disponible en Pedidos. */ }
+    }
+    void loadPrompts();
     return () => { cancelled = true; };
   }, [state?.user?.id, state?.user?.role]);
   useEffect(() => {
@@ -2940,13 +2958,14 @@ export default function App() {
           <a href={routes.adminComentarios} aria-current={page === "adminComentarios" ? "page" : undefined} onClick={(event) => follow(event, "adminComentarios")}><span className="mobile-icon"><Star size={22} /></span><span>Comentarios</span></a>
         </nav>
       )}
-      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice || reviewPrompt || paymentPrompt || commentsKitchen)} />
+      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice || fridgeNotices || reviewPrompt || paymentPrompt || commentsKitchen)} />
+      {fridgeNotices && <FridgeNoticeDialog notices={fridgeNotices} onClose={() => setFridgeNotices(null)} onOrders={() => { setFridgeNotices(null); go("pedidos"); }} />}
       {paymentPrompt && <PaymentPromptDialog order={paymentPrompt} onClose={() => setPaymentPrompt(null)} onUploaded={async () => {
         setPaymentPrompt(null);
         invalidateCache("orders:");
         await loadOrders(0, true);
       }} />}
-      {reviewPrompt && !paymentPrompt && <ReviewPromptDialog review={reviewPrompt} onClose={() => setReviewPrompt(null)} onSaved={async () => {
+      {reviewPrompt && !fridgeNotices && !paymentPrompt && <ReviewPromptDialog review={reviewPrompt} onClose={() => setReviewPrompt(null)} onSaved={async () => {
         setReviewPrompt(null);
         invalidateCache("orders:");
         try {
@@ -3355,7 +3374,10 @@ function ReviewPromptDialog({ review, onClose, onSaved }: {
   onSaved: () => Promise<void>;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => { if (!ref.current?.open) ref.current?.showModal(); }, []);
+  useEffect(() => {
+    if (!ref.current?.open) ref.current?.showModal();
+    api(`/api/orders/${review.orderId}/review-prompt-seen`, {}).catch(() => {});
+  }, [review.orderId]);
   return createPortal(<dialog ref={ref} className="review-prompt-dialog" aria-labelledby="review-prompt-title" onClose={onClose}>
     <div className="review-prompt-scroll dialog-scroll">
       <button type="button" className="icon-button review-prompt-close" onClick={() => ref.current?.close()} aria-label="Cerrar reseña"><X size={20} /></button>
@@ -3363,6 +3385,25 @@ function ReviewPromptDialog({ review, onClose, onSaved }: {
       <h2 id="review-prompt-title">¿Qué tal estuvo la sazón?</h2>
       <p>El promedio se reflejará en la puntuación de {review.kitchenName}.</p>
       <KitchenReviewForm review={review} onSaved={onSaved} inPrompt />
+    </div>
+  </dialog>, document.body);
+}
+
+function FridgeNoticeDialog({ notices, onClose, onOrders }: { notices: FridgeNotice[]; onClose: () => void; onOrders: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (!ref.current?.open) ref.current?.showModal(); }, []);
+  return createPortal(<dialog ref={ref} className="fridge-notice-dialog" aria-labelledby="fridge-notice-title" onClose={onClose}>
+    <div className="fridge-notice-scroll dialog-scroll">
+      <button type="button" className="icon-button review-prompt-close" onClick={() => ref.current?.close()} aria-label="Cerrar aviso"><X size={20} /></button>
+      <span className="eyebrow">AVISO DE TU PEDIDO</span>
+      <h2 id="fridge-notice-title"><Refrigerator size={29} aria-hidden="true" /> Tu comida está en la refri</h2>
+      <p>La cocina dejó tu táper en la refri. Revisa la foto para encontrarlo y comunícate al número indicado.</p>
+      {notices.map((notice) => <section className="fridge-notice-item" key={notice.orderId} aria-label={`Pedido de ${notice.kitchenName}`}>
+        <strong>{notice.kitchenName} · {dateLabel(notice.date)}</strong>
+        {notice.photoUrl ? <img src={notice.photoUrl} alt={`Ubicación del táper de ${notice.kitchenName} en la refri`} /> : <p>La foto ya no está disponible. Comunícate al número indicado para ubicar tu comida.</p>}
+        <a href={`tel:${notice.phone.replace(/\D/g, "")}`}><Phone size={17} aria-hidden="true" /> {notice.phone}</a>
+      </section>)}
+      <div className="fridge-notice-actions"><Button onClick={onOrders}>Ver mis pedidos</Button></div>
     </div>
   </dialog>, document.body);
 }
@@ -3489,6 +3530,8 @@ function OrderCard({
   const label =
     order.status === "entregado"
       ? "Entregado"
+      : order.status === "entregado_en_refri"
+        ? "Entregado en refri"
       : order.status === "no_se_presento"
         ? "No recogido"
         : order.status === "entrega_pendiente"
@@ -3502,6 +3545,7 @@ function OrderCard({
             : order.paymentStatus === "approved" ? "Pago aprobado"
             : "Reservado";
   const statusTone = order.status === "entregado" ? "delivered"
+    : order.status === "entregado_en_refri" ? "fridge"
     : order.status === "cancelado" ? "canceled"
     : order.status === "no_se_presento" || order.paymentStatus === "rejected" || order.paymentStatus === "expired" ? "danger"
     : order.status === "entrega_pendiente" || order.paymentStatus === "awaiting_proof" || order.paymentStatus === "under_review" ? "warning"
@@ -3513,7 +3557,9 @@ function OrderCard({
   const paymentLabel = order.paymentCheckoutId
     ? `Yape · ${order.paymentStatus === "approved" ? "aprobado" : order.paymentStatus === "under_review" ? "en revisión" : order.paymentStatus === "awaiting_proof" ? "falta comprobante" : order.paymentStatus === "expired" ? "plazo vencido" : "rechazado"}`
     : order.payment;
-  const statusInfo = order.paymentStatus === "expired"
+  const statusInfo = order.status === "entregado_en_refri"
+    ? "Tu comida quedó en la refri. Abre el detalle para ver la foto y el número de contacto."
+    : order.paymentStatus === "expired"
     ? "Terminó el plazo para subir el comprobante y se liberó el cupo. Si ya yapeaste, contacta a Menúu."
     : order.paymentStatus === "rejected"
       ? `El comprobante fue rechazado${order.paymentReviewNote ? `: ${order.paymentReviewNote}` : ""}. Si ya yapeaste, contacta a Menúu.`
@@ -3553,7 +3599,7 @@ function OrderCard({
           <span className="order-pickup"><BrandCalendarIcon size={18} aria-hidden="true" /><span>Recojo: {dateLabel(order.date)} · {pickupWindow(order.deliveryTime, order.pickupUntil)}</span></span>
           <strong className="order-total">{money(order.totalSoles)}</strong>
           <span className={`order-status order-status-${statusTone}`}>
-            {statusTone === "danger" ? null : statusTone === "reserved" || statusTone === "delivered" ? <Check size={15} aria-hidden="true" /> : <Clock3 size={15} aria-hidden="true" />}
+            {statusTone === "danger" ? null : statusTone === "fridge" ? <Refrigerator size={15} aria-hidden="true" /> : statusTone === "reserved" || statusTone === "delivered" ? <Check size={15} aria-hidden="true" /> : <Clock3 size={15} aria-hidden="true" />}
             {label}
             {statusInfo && <span className="order-status-info" role="img" aria-label={statusInfo} data-tooltip={statusInfo}><CircleAlert size={15} aria-hidden="true" /></span>}
           </span>
@@ -3574,6 +3620,11 @@ function OrderCard({
               ))}
             </div>
             {order.paymentStatus === "approved" && order.status === "reservado" && <p className="yape-cancel-note">Si necesitas cancelar este pedido pagado, contacta a Menúu para coordinar la devolución.</p>}
+            {order.status === "entregado_en_refri" && <div className="order-fridge-details">
+              <strong><Refrigerator size={19} aria-hidden="true" /> Tu táper quedó en la refri</strong>
+              {order.fridgePhotoUrl ? <img src={order.fridgePhotoUrl} alt={`Ubicación de tu táper de ${order.kitchenName} en la refri`} loading="lazy" /> : <p>La foto ya no está disponible. Comunícate al número indicado para ubicar tu comida.</p>}
+              {order.fridgePhone && <a href={`tel:${order.fridgePhone.replace(/\D/g, "")}`}><Phone size={17} aria-hidden="true" /> {order.fridgePhone}</a>}
+            </div>}
             {order.status === "entrega_pendiente" && <p className="review-note">Tu solicitud está registrada. La entrega aún no ha sido confirmada.</p>}
             {order.status === "entregado" && !order.reviewEnabled && order.kitchenRating === null && <p className="review-note">La reseña todavía no está habilitada para este pedido.</p>}
             {order.kitchenRating !== null && <p className="review-note">Calificaste la comida de {order.kitchenName}.{order.kitchenComment && <> “{order.kitchenComment}”</>}</p>}

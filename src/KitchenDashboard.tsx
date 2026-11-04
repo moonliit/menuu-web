@@ -87,8 +87,10 @@ type KitchenReservation = {
   createdAt: string;
   manualAdded: boolean;
   extraPortion: boolean;
+  fridgeAt: string | null;
+  fridgePhone: string | null;
 };
-type ReservationState = "pending" | "delivered" | "cancelled";
+type ReservationState = "pending" | "fridge" | "delivered" | "cancelled";
 const limaDeliveryInput = (value: string) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Lima",
@@ -119,6 +121,8 @@ const reservationState = (item: KitchenReservation): ReservationState =>
     ? "cancelled"
     : item.fulfillmentStatus === "delivered"
       ? "delivered"
+      : item.fridgeAt
+        ? "fridge"
       : "pending";
 const deliveredUnitsForOffer = (
   reservations: KitchenReservation[],
@@ -927,10 +931,18 @@ function KitchenReservationPanel({
   const removeDialogRef = useRef<HTMLDialogElement>(null);
   const [removeItem, setRemoveItem] = useState<KitchenReservation | null>(null);
   const [removeError, setRemoveError] = useState("");
+  const fridgeDialogRef = useRef<HTMLDialogElement>(null);
+  const fridgeInputRef = useRef<HTMLInputElement>(null);
+  const [fridgeItem, setFridgeItem] = useState<KitchenReservation | null>(null);
+  const [fridgeFile, setFridgeFile] = useState<File | null>(null);
+  const [fridgePhone, setFridgePhone] = useState("");
+  const [fridgeError, setFridgeError] = useState("");
   const [extraQuantity, setExtraQuantity] = useState("1");
   const [extraMethod, setExtraMethod] = useState("");
   useEffect(() => { if (extraItem) extraDialogRef.current?.showModal(); }, [extraItem]);
   useEffect(() => { if (removeItem) removeDialogRef.current?.showModal(); }, [removeItem]);
+  useEffect(() => { if (fridgeItem) fridgeDialogRef.current?.showModal(); }, [fridgeItem]);
+  const fridgeDrop = useImageDrop(setFridgeFile, !!busyOrder);
   useEffect(() => {
     if (paymentPrompt) paymentDialogRef.current?.showModal();
   }, [paymentPrompt]);
@@ -1119,6 +1131,39 @@ function KitchenReservationPanel({
       setBusyOrder("");
     }
   }
+  async function saveFridge() {
+    if (!fridgeItem || !fridgeFile || !fridgePhone) return;
+    const extension = fridgeFile.name.split(".").pop()?.toLowerCase();
+    const mime = ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp" } as Record<string, string>)[extension || ""] || fridgeFile.type;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) {
+      setFridgeError("Elige una foto PNG, JPG o WebP.");
+      return;
+    }
+    if (fridgeFile.size > 2_000_000) {
+      setFridgeError("La foto debe pesar como máximo 2 MB.");
+      return;
+    }
+    setBusyOrder(fridgeItem.orderId);
+    setFridgeError("");
+    try {
+      const csrf = document.cookie.split(";").map((part) => part.trim())
+        .find((part) => part.startsWith("menuu_csrf="))?.slice("menuu_csrf=".length);
+      const params = new URLSearchParams({ orderId: fridgeItem.orderId, phone: fridgePhone });
+      const response = await fetch(`${apiPrefix}/reservations/fridge?${params}`, {
+        method: "POST",
+        headers: { "Content-Type": mime, ...(csrf ? { "X-CSRF-Token": csrf } : {}) },
+        body: fridgeFile,
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "No pudimos registrar la entrega en refri.");
+      await onChanged();
+      fridgeDialogRef.current?.close();
+    } catch (cause) {
+      setFridgeError(cause instanceof Error ? cause.message : "No pudimos registrar la entrega en refri.");
+    } finally {
+      setBusyOrder("");
+    }
+  }
   const pickupEndTime = new Date(
     `${offer.date}T${offer.pickupUntil}:00-05:00`,
   ).getTime();
@@ -1180,6 +1225,7 @@ function KitchenReservationPanel({
             options={[
               { value: "all", label: "Todos los estados" },
               { value: "pending", label: "Pendientes" },
+              { value: "fridge", label: "En refri" },
               { value: "delivered", label: "Entregadas" },
               { value: "cancelled", label: "Canceladas" },
             ]}
@@ -1220,7 +1266,9 @@ function KitchenReservationPanel({
                     ? item.status === "cancelado"
                       ? "Cancelado por estudiante"
                       : "Cancelado · no vino"
-                    : "Pendiente";
+                    : status === "fridge"
+                      ? "Entregado en refri"
+                      : "Pendiente";
               return (
                 <article
                   className={`km-reservation km-reservation-${status}`}
@@ -1274,6 +1322,9 @@ function KitchenReservationPanel({
                         </small>
                       )}
                     <div className="km-reservation-actions">
+                      {item.status === "reservado" && item.fulfillmentStatus === "pending" && !item.fridgeAt && item.paymentCheckoutId && item.paymentStatus === "approved" && Date.now() >= new Date(`${offer.date}T${offer.deliveryTime}:00-05:00`).getTime() && offer.date === todayLima() && (
+                        <Button variant="secondary" disabled={!!busyOrder} onClick={() => { setFridgeItem(item); setFridgeFile(null); setFridgePhone(""); setFridgeError(""); }}>Entregado en refri</Button>
+                      )}
                       {item.status === "reservado" && item.paymentStatus === "approved" && !pickupEnded && Date.now() >= new Date(`${offer.date}T${offer.deliveryTime}:00-05:00`).getTime() && canAdd && <Button variant="secondary" disabled={!!busyOrder} onClick={() => { setExtraItem(item); setExtraQuantity("1"); setExtraMethod(""); }}>Vender porción adicional</Button>}
                       {apiPrefix === "/api/admin" &&
                         item.status === "reservado" &&
@@ -1300,6 +1351,7 @@ function KitchenReservationPanel({
                         )}
                       {item.status === "reservado" &&
                         item.fulfillmentStatus === "pending" &&
+                        !item.fridgeAt &&
                         pickupEnded &&
                         new Date(item.createdAt).getTime() <= pickupEndTime && (
                           <Button
@@ -1317,7 +1369,7 @@ function KitchenReservationPanel({
                           </Button>
                         )}
                       {item.status === "reservado" &&
-                        item.fulfillmentStatus !== "pending" && (
+                        (item.fulfillmentStatus !== "pending" || !!item.fridgeAt) && (
                           <Button
                             variant="quiet"
                             disabled={!!busyOrder}
@@ -1522,6 +1574,24 @@ function KitchenReservationPanel({
         <div className="km-payment-actions">
           <Button variant="secondary" disabled={!!busyOrder} onClick={() => removeDialogRef.current?.close()}>Volver</Button>
           <Button disabled={!!busyOrder} onClick={removeManualReservation}>{busyOrder ? "Eliminando…" : "Sí, eliminar alta"}</Button>
+        </div>
+      </dialog>
+      <dialog ref={fridgeDialogRef} className="km-payment-dialog" aria-labelledby="km-fridge-title" onClose={() => { setFridgeItem(null); setFridgeFile(null); setFridgeError(""); }}>
+        <span className="eyebrow">PEDIDO EN REFRI</span>
+        <h2 id="km-fridge-title">Entregado en refri</h2>
+        <p>Indica dónde dejaste el táper de {fridgeItem?.studentName}. La foto se eliminará al comenzar el día siguiente en Lima.</p>
+        <KitchenSelect id="km-fridge-phone" withinDialog label="Número de contacto" value={fridgePhone} placeholder="Selecciona un número" options={[{ value: "+51 934 695 273", label: "+51 934 695 273" }]} onChange={setFridgePhone} />
+        <div className={`km-fridge-upload${fridgeDrop.dragging ? " km-fridge-upload-dragging" : ""}`} {...fridgeDrop.dropProps}>
+          <strong>Foto de la ubicación del táper</strong>
+          <button type="button" className="km-outline-button" disabled={!!busyOrder} onClick={() => fridgeInputRef.current?.click()}><BrandCameraIcon size={18} /> Elegir foto</button>
+          <input ref={fridgeInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={!!busyOrder} onChange={(event) => { setFridgeFile(event.currentTarget.files?.[0] || null); event.currentTarget.value = ""; }} />
+          <span>{fridgeFile ? fridgeFile.name : "O arrastra una foto aquí"}</span>
+          <small>PNG, JPG o WebP · máximo 2 MB</small>
+        </div>
+        {fridgeError && <p className="km-reservations-error" role="alert">{fridgeError}</p>}
+        <div className="km-payment-actions">
+          <Button variant="secondary" disabled={!!busyOrder} onClick={() => fridgeDialogRef.current?.close()}>Volver</Button>
+          <Button disabled={!!busyOrder || !fridgeFile || !fridgePhone} onClick={saveFridge}>{busyOrder ? "Guardando…" : "Confirmar en refri"}</Button>
         </div>
       </dialog>
       <dialog

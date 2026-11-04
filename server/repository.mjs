@@ -340,6 +340,8 @@ export async function getOrders(userId, page = null) {
     o.pickup_until AS "pickupUntil",o.pickup_point AS "pickupPoint",o.status,COALESCE(o.payment_recorded,o.payment) AS payment,
     o.payment_checkout_id AS "paymentCheckoutId",p.status AS "paymentStatus",p.expires_at AS "paymentExpiresAt",p.review_note AS "paymentReviewNote",p.amount_cents AS "paymentAmountCents",
     o.fulfillment_status AS "fulfillmentStatus",o.review_enabled AS "reviewEnabled",r.kitchen_rating AS "kitchenRating",r.comment AS "kitchenComment",
+    o.fridge_at AS "fridgeAt",o.fridge_phone AS "fridgePhone",o.fridge_image_expires_at AS "fridgeImageExpiresAt",
+    CASE WHEN o.fridge_image IS NOT NULL AND o.fridge_image_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now') THEN 1 ELSE 0 END AS "fridgePhotoAvailable",
     o.total_cents AS "totalCents",o.created_at AS "createdAt" FROM orders o
     LEFT JOIN order_reviews r ON r.order_id=o.id
     LEFT JOIN payment_checkouts p ON p.id=o.payment_checkout_id
@@ -416,6 +418,9 @@ export async function getOrders(userId, page = null) {
     reviewEnabled: row.reviewEnabled,
     kitchenRating: row.kitchenRating,
     kitchenComment: row.kitchenComment,
+    fridgeAt: row.fridgeAt,
+    fridgePhone: row.fridgePhone,
+    fridgePhotoUrl: row.fridgePhotoAvailable ? `/api/orders/${row.id}/fridge-photo` : null,
     totalSoles: soles(row.totalCents),
     createdAt: row.createdAt,
     items: items.get(row.id) || [],

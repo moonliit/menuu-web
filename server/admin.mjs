@@ -56,7 +56,7 @@ export async function adminData({
        i.delivered_quantity AS "deliveredQuantity",i.booking_deadline_at AS "bookingDeadlineAt",
        r.status,r.fulfillment_status AS "fulfillmentStatus",r.payment_recorded AS "paymentRecorded",r.delivered_at AS "deliveredAt",
        r.payment_checkout_id AS "paymentCheckoutId",p.status AS "paymentStatus",
-       r.created_at AS "createdAt",
+       r.created_at AS "createdAt",r.fridge_at AS "fridgeAt",r.fridge_phone AS "fridgePhone",
        EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_add') AS "manualAdded",
        EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='extra_portion') AS "extraPortion"
        FROM orders r JOIN order_items i ON i.order_id=r.id

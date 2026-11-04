@@ -47,6 +47,7 @@ import { migrate } from "../scripts/migrate.mjs";
 import { dispatchPickupReminders, pushConfig, removePushSubscription, savePushSubscription, validDispatchSecret } from "./push.mjs";
 import { expireUnpaidCheckouts, paymentProof, pendingPayments, reviewPayment, submitPaymentProof } from "./payments.mjs";
 import { adminReviews, markReviewPromptSeen, moderateReview, pendingReviewPrompt, recentKitchenReviews } from "./reviews.mjs";
+import { clearExpiredFridgePhotos, fridgeNotices, fridgePhoto, leaveOrderInFridge } from "./fridge.mjs";
 
 const googleClientId =
   process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
@@ -211,6 +212,26 @@ async function body(req) {
   }
 }
 
+async function fridgeUpload(req) {
+  const mime = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+  const chunks = [];
+  let size = 0;
+  if (Buffer.isBuffer(req.body)) {
+    size = req.body.length;
+    chunks.push(req.body);
+  } else {
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 2_000_000)
+        throw Object.assign(new Error("La foto supera 2 MB."), { status: 413 });
+      chunks.push(chunk);
+    }
+  }
+  if (size > 2_000_000)
+    throw Object.assign(new Error("La foto supera 2 MB."), { status: 413 });
+  return { bytes: Buffer.concat(chunks), mime };
+}
+
 function sessionToken(req) {
   const cookie = cookieValue(req, "menuu_session");
 
@@ -373,6 +394,9 @@ function visibleOrder(order, now = new Date()) {
   if (order.fulfillmentStatus === "delivered")
     return { ...order, status: "entregado" };
 
+  if (order.fridgeAt && order.fulfillmentStatus === "pending")
+    return { ...order, status: "entregado_en_refri" };
+
   if (order.fulfillmentStatus === "no_show")
     return { ...order, status: "no_se_presento" };
 
@@ -395,8 +419,23 @@ async function handleApi(req, res, url) {
     if (!validDispatchSecret(req.headers.authorization))
       return error(res, 401, "Acceso no permitido.");
 
+    await clearExpiredFridgePhotos();
     return json(res, 200, await dispatchPickupReminders());
   }
+  if (req.method === "GET" && url.pathname === "/api/fridge/cleanup") {
+    if (!validDispatchSecret(req.headers.authorization))
+      return error(res, 401, "Acceso no permitido.");
+    return json(res, 200, await clearExpiredFridgePhotos());
+  }
+  const fridgePhotoMatch = /^\/api\/orders\/([a-f0-9-]{36})\/fridge-photo$/.exec(url.pathname);
+  if (req.method === "GET" && fridgePhotoMatch) {
+    const user = await userFromSession(sessionToken(req));
+    const image = await fridgePhoto(fridgePhotoMatch[1], user);
+    res.writeHead(200, { "Content-Type": image.mime, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
+    return res.end(image.content);
+  }
+  if (["/api/orders", "/api/bootstrap", "/api/kitchen/data", "/api/admin/data"].includes(url.pathname))
+    await clearExpiredFridgePhotos();
 
   if (req.method === "GET" && url.pathname === "/api/push/config")
     return json(res, 200, pushConfig());
@@ -500,6 +539,12 @@ async function handleApi(req, res, url) {
       (sessionToken(req) && !validCsrf(req))
     )
       return error(res, 403, "Solicitud no permitida.");
+    if (url.pathname === "/api/admin/reservations/fridge") {
+      const orderId = url.searchParams.get("orderId");
+      const kitchenId = await adminOrderKitchen(orderId);
+      const { bytes, mime } = await fridgeUpload(req);
+      return json(res, 200, await leaveOrderInFridge(kitchenId, user.id, orderId, url.searchParams.get("phone"), bytes, mime));
+    }
     const data = await body(req);
     const moderationMatch = /^\/api\/admin\/reviews\/([a-zA-Z0-9-]+)\/moderate$/.exec(url.pathname);
     if (moderationMatch)
@@ -612,6 +657,10 @@ async function handleApi(req, res, url) {
         ),
       });
     }
+    if (url.pathname === "/api/kitchen/reservations/fridge") {
+      const { bytes, mime } = await fridgeUpload(req);
+      return json(res, 200, await leaveOrderInFridge(user.kitchenId, user.id, url.searchParams.get("orderId"), url.searchParams.get("phone"), bytes, mime));
+    }
     const data = await body(req);
 
     if (url.pathname === "/api/kitchen/profile") {
@@ -672,6 +721,12 @@ async function handleApi(req, res, url) {
     const user = await userFromSession(sessionToken(req));
     if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
     return json(res, 200, { review: await pendingReviewPrompt(user.id) });
+  }
+  if (req.method === "GET" && url.pathname === "/api/fridge/pending") {
+    const user = await userFromSession(sessionToken(req));
+    if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+    await clearExpiredFridgePhotos();
+    return json(res, 200, { notices: await fridgeNotices(user.id) });
   }
 
   if (req.method === "GET" && url.pathname === "/api/orders") {

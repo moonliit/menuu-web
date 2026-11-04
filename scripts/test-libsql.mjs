@@ -107,6 +107,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
   const { dispatchPickupReminders, savePushSubscription, validDispatchSecret } = await import("../server/push.mjs");
   const { submitPaymentProof, reviewPayment, pendingPayments, expireUnpaidCheckouts, paymentProof } = await import("../server/payments.mjs");
   const { adminReviews, markReviewPromptSeen, moderateReview, pendingReviewPrompt, recentKitchenReviews } = await import("../server/reviews.mjs");
+  const { clearExpiredFridgePhotos, fridgeNotices, fridgePhoto, leaveOrderInFridge } = await import("../server/fridge.mjs");
 
   try {
     const migrationDb = getDb();
@@ -1480,6 +1481,34 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     assert.equal(extraSaved.checkout, null);
     assert.equal((await getOrders(consumers[0].id)).find((order) => order.id === prepaid.id).paymentStatus, "approved");
     assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [extraOffer])).rows[0].count, 2);
+    const fridgeMoment = new Date(`${extraDate}T13:20:00-05:00`);
+    const fridgeBytes = Buffer.from("foto de ubicacion en refri para prueba");
+    await assert.rejects(
+      leaveOrderInFridge("another-kitchen", "kitchen-actor", prepaid.id, "+51 934 695 273", fridgeBytes, "image/png", fridgeMoment),
+      { status: 404 },
+    );
+    await assert.rejects(
+      leaveOrderInFridge("test-kitchen", "kitchen-actor", prepaid.id, "+51 934 695 273", fridgeBytes, "image/png", new Date(`${extraDate}T12:59:00-05:00`)),
+      { status: 409 },
+    );
+    await assert.rejects(
+      leaveOrderInFridge("test-kitchen", "kitchen-actor", prepaid.id, "+51 000 000 000", fridgeBytes, "image/png", fridgeMoment),
+      { status: 400 },
+    );
+    await assert.rejects(
+      leaveOrderInFridge("test-kitchen", "kitchen-actor", prepaid.id, "+51 934 695 273", Buffer.alloc(2_000_001), "image/png", fridgeMoment),
+      { status: 400 },
+    );
+    await leaveOrderInFridge("test-kitchen", "kitchen-actor", prepaid.id, "+51 934 695 273", fridgeBytes, "image/png", fridgeMoment);
+    assert.equal((await fridgeNotices(consumers[0].id, fridgeMoment)).some((notice) => notice.orderId === prepaid.id && notice.photoUrl), true);
+    assert.deepEqual((await fridgePhoto(prepaid.id, { id: consumers[0].id, role: "consumer" }, fridgeMoment)).content, fridgeBytes);
+    await assert.rejects(fridgePhoto(prepaid.id, { id: consumers[1].id, role: "consumer" }, fridgeMoment), { status: 404 });
+    const expiryMoment = new Date(Date.parse(`${extraDate}T05:00:00Z`) + 86_400_000);
+    await clearExpiredFridgePhotos(expiryMoment);
+    await assert.rejects(fridgePhoto(prepaid.id, { id: consumers[0].id, role: "consumer" }, expiryMoment), { status: 404 });
+    assert.equal((await fridgeNotices(consumers[0].id, expiryMoment)).find((notice) => notice.orderId === prepaid.id)?.photoUrl, null);
+    await updateKitchenReservation("test-kitchen", "kitchen-actor", { orderId: prepaid.id, orderItemId: prepaidItem.id, action: "deliver", deliveredQuantity: 1, paymentMethod: "QR" });
+    assert.equal((await fridgeNotices(consumers[0].id, expiryMoment)).some((notice) => notice.orderId === prepaid.id), false);
     const expiryDate = new Date(Date.parse(`${offerDate}T12:00:00Z`) + 3 * 86400_000).toISOString().slice(0, 10);
     const expiryOffer = await saveOffer("test-kitchen", {
       dishId, date: expiryDate, deliveryTime: "13:00", pickupUntil: "13:10",

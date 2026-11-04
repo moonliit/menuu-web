@@ -2977,6 +2977,10 @@ p {
   background: #d6e8d9;
   color: var(--color-brand);
 }
+.order-status-fridge {
+  background: #e0efed;
+  color: var(--color-brand);
+}
 .order-status-warning {
   background: #fff0d9;
   color: #754409;
@@ -3124,6 +3128,36 @@ p {
 }
 .order-attention-error {
   color: var(--color-error);
+}
+.order-fridge-details {
+  display: grid;
+  gap: 10px;
+  max-width: 420px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: #eef5ee;
+}
+.order-fridge-details > strong,
+.order-fridge-details > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-brand);
+}
+.order-fridge-details img {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: var(--color-surface);
+}
+.order-fridge-details p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 14px;
 }
 @media (max-width: 900px) {
   .order-overview {
@@ -3295,7 +3329,8 @@ p {
   font-weight: 400;
 }
 .review-prompt-dialog,
-.kitchen-comments-dialog {
+.kitchen-comments-dialog,
+.fridge-notice-dialog {
   width: min(560px, calc(100% - 32px));
   max-height: min(85dvh, 740px);
   overflow-y: auto;
@@ -3310,31 +3345,78 @@ p {
   scrollbar-width: thin;
 }
 .review-prompt-dialog,
-.kitchen-comments-dialog {
+.kitchen-comments-dialog,
+.fridge-notice-dialog {
   padding: 0;
   overflow: hidden;
 }
 .review-prompt-scroll,
-.kitchen-comments-scroll {
+.kitchen-comments-scroll,
+.fridge-notice-scroll {
   max-height: min(calc(85dvh - 2px), 738px);
   padding: 30px;
   border-radius: 21px;
 }
 .review-prompt-dialog::backdrop,
-.kitchen-comments-dialog::backdrop {
+.kitchen-comments-dialog::backdrop,
+.fridge-notice-dialog::backdrop {
   background: rgb(11 35 24 / 56%);
 }
 .review-prompt-dialog h2,
-.kitchen-comments-dialog h2 {
+.kitchen-comments-dialog h2,
+.fridge-notice-dialog h2 {
   margin: 8px 40px 9px 0;
   font: 500 32px/1.15 var(--font-display);
 }
 .review-prompt-scroll > p,
-.kitchen-comments-scroll > p {
+.kitchen-comments-scroll > p,
+.fridge-notice-scroll > p {
   color: var(--color-muted);
 }
 .review-prompt-close {
   float: right;
+}
+.fridge-notice-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fridge-notice-dialog h2 svg {
+  flex: none;
+  color: var(--color-brand);
+}
+.fridge-notice-item {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: #eef5ee;
+}
+.fridge-notice-item img {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: var(--color-surface);
+}
+.fridge-notice-item p {
+  margin: 0;
+  color: var(--color-muted);
+}
+.fridge-notice-item a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-brand);
+  font-weight: 600;
+}
+.fridge-notice-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
 }
 .review-prompt-dialog .review-form {
   margin-top: 16px;
@@ -3475,7 +3557,8 @@ p {
     justify-self: start;
   }
   .review-prompt-scroll,
-  .kitchen-comments-scroll {
+  .kitchen-comments-scroll,
+  .fridge-notice-scroll {
     padding: 22px;
   }
 }

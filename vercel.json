@@ -9,7 +9,10 @@
       "maxDuration": 30
     }
   },
-  "crons": [{ "path": "/api/push/dispatch", "schedule": "55 17 * * 1-6" }],
+  "crons": [
+    { "path": "/api/push/dispatch", "schedule": "55 17 * * 1-6" },
+    { "path": "/api/fridge/cleanup", "schedule": "5 5 * * *" }
+  ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/handler?route=:path*" }
   ]

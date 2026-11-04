@@ -254,6 +254,7 @@ export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
     ) : { rows: [{ count: 0 }] },
     db.query(
       `SELECT i.offer_id AS "offerId",i.id AS "orderItemId",r.id AS "orderId",r.code,u.name AS "studentName",u.email AS "studentEmail",i.quantity,i.unit_price_cents AS "unitPriceCents",i.delivered_quantity AS "deliveredQuantity",i.booking_deadline_at AS "bookingDeadlineAt",r.status,r.fulfillment_status AS "fulfillmentStatus",r.payment_recorded AS "paymentRecorded",r.delivered_at AS "deliveredAt",r.created_at AS "createdAt",r.payment_checkout_id AS "paymentCheckoutId",p.status AS "paymentStatus",
+         r.fridge_at AS "fridgeAt",r.fridge_phone AS "fridgePhone",
          EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_add') AS "manualAdded",
          EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='extra_portion') AS "extraPortion"
          FROM orders r JOIN order_items i ON i.order_id=r.id JOIN users u ON u.id=r.user_id JOIN offers o ON o.id=i.offer_id LEFT JOIN payment_checkouts p ON p.id=r.payment_checkout_id
@@ -541,7 +542,7 @@ export async function updateKitchenReservation(
   return transaction(async (db) => {
     const order = (
       await db.query(
-        `SELECT id,status,fulfillment_status AS "fulfillmentStatus",delivered_at AS "deliveredAt",offer_date AS date,pickup_until AS "pickupUntil",created_at AS "createdAt",payment_checkout_id AS "paymentCheckoutId",
+        `SELECT id,status,fulfillment_status AS "fulfillmentStatus",delivered_at AS "deliveredAt",offer_date AS date,pickup_until AS "pickupUntil",created_at AS "createdAt",payment_checkout_id AS "paymentCheckoutId",fridge_at AS "fridgeAt",
          EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=orders.id AND e.action='manual_add') AS "manualAdded"
          FROM orders WHERE id=$1 AND kitchen_id=$2`,
         [orderId, kitchenId],
@@ -594,6 +595,8 @@ export async function updateKitchenReservation(
           "Espera hasta que termine la ventana de recojo para marcar ausencia.",
           409,
         );
+      if (action === "cancel" && order.fridgeAt)
+        fail("Este pedido quedó en refri. Corrige ese estado antes de marcar una ausencia.", 409);
 
       if (
         action === "cancel" &&
@@ -705,6 +708,7 @@ export async function updateKitchenReservation(
         `UPDATE orders SET fulfillment_status=$3,pickup_confirmed=0,
          payment_recorded=CASE WHEN payment_checkout_id IS NOT NULL THEN 'QR' WHEN $3='delivered' THEN $4 ELSE NULL END,
          delivered_at=$5,
+         fridge_at=NULL,fridge_phone=NULL,fridge_image=NULL,fridge_image_mime=NULL,fridge_image_expires_at=NULL,
          created_at=CASE WHEN $6=1 THEN $5 ELSE created_at END,
          review_enabled=CASE WHEN $3='delivered' THEN 1 ELSE 0 END,
          review_prompt_seen_at=CASE WHEN $3='delivered' THEN review_prompt_seen_at ELSE NULL END

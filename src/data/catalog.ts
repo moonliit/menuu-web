@@ -104,6 +104,9 @@ export type Order = {
   reviewEnabled: boolean;
   kitchenRating: number | null;
   kitchenComment: string | null;
+  fridgeAt: string | null;
+  fridgePhone: string | null;
+  fridgePhotoUrl: string | null;
   payment: string;
   paymentCheckoutId: string | null;
   paymentStatus: "awaiting_proof" | "under_review" | "approved" | "rejected" | "expired" | null;
