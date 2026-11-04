@@ -41,8 +41,8 @@ export async function submitPaymentProof(userId, checkoutId, bytes, declaredMime
     if (checkout.status !== "awaiting_proof") fail("Este pago ya no admite comprobantes.", 409);
     if (checkout.expiresAt <= new Date().toISOString()) fail("El plazo para subir el comprobante terminó.", 409);
     await db.query(
-      "UPDATE payment_checkouts SET status='under_review',proof_mime=$2,proof_content=$3,proof_uploaded_at=$4 WHERE id=$1",
-      [checkoutId, mime, bytes, new Date().toISOString()],
+      "UPDATE payment_checkouts SET status='under_review',proof_mime=$2,proof_declared_mime=$3,proof_content=$4,proof_uploaded_at=$5 WHERE id=$1",
+      [checkoutId, ["image/png", "image/jpeg"].includes(mime) ? mime : null, mime, bytes, new Date().toISOString()],
     );
     return { ok: true };
   });
@@ -50,7 +50,7 @@ export async function submitPaymentProof(userId, checkoutId, bytes, declaredMime
 
 export async function paymentProof(checkoutId, user) {
   const checkout = (await getDb().query(
-    "SELECT user_id AS \"userId\",proof_mime AS mime,proof_content AS content FROM payment_checkouts WHERE id=$1",
+    "SELECT user_id AS \"userId\",COALESCE(proof_declared_mime,proof_mime) AS mime,proof_content AS content FROM payment_checkouts WHERE id=$1",
     [checkoutId],
   )).rows[0];
   if (!checkout || !checkout.content || (user.role !== "admin" && user.id !== checkout.userId))
@@ -98,6 +98,10 @@ export async function reviewPayment(checkoutId, actorId, decision, note = "") {
     await db.query(
       "UPDATE payment_checkouts SET status=$2,reviewed_by=$3,reviewed_at=$4,review_note=$5 WHERE id=$1",
       [checkoutId, decision, actorId, new Date().toISOString(), cleanedNote],
+    );
+    if (decision === "approved") await db.query(
+      "UPDATE payment_checkouts SET proof_content=NULL,proof_mime=NULL,proof_declared_mime=NULL WHERE id=$1",
+      [checkoutId],
     );
     for (const order of orders.rows) await db.query(
       "INSERT INTO kitchen_reservation_events(id,order_id,actor_user_id,action,detail) VALUES($1,$2,$3,$4,$5)",

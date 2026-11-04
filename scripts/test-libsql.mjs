@@ -238,16 +238,18 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       consumers[0].id,
       first[0].paymentCheckoutId,
       Buffer.from("comprobante pendiente de revision manual"),
-      "image/png",
+      "image/webp",
     );
     assert.equal((await pendingPayments()).length, 1);
-    assert.equal((await paymentProof(first[0].paymentCheckoutId, { id: consumers[0].id, role: "consumer" })).mime, "image/png");
+    assert.equal((await paymentProof(first[0].paymentCheckoutId, { id: consumers[0].id, role: "consumer" })).mime, "image/webp");
     await assert.rejects(paymentProof(first[0].paymentCheckoutId, { id: consumers[1].id, role: "consumer" }), { status: 404 });
     await assert.rejects(
       reviewPayment(first[0].paymentCheckoutId, "payment-reviewer", "rejected"),
       { status: 400 },
     );
     await reviewPayment(first[0].paymentCheckoutId, "payment-reviewer", "approved");
+    assert.equal((await db.query("SELECT proof_content FROM payment_checkouts WHERE id=$1", [first[0].paymentCheckoutId])).rows[0].proof_content, null);
+    await assert.rejects(paymentProof(first[0].paymentCheckoutId, { id: consumers[0].id, role: "consumer" }), { status: 404 });
     assert.equal((await getOrders(consumers[0].id))[0].paymentStatus, "approved");
     assert.deepEqual(
       await createBooking(

@@ -3382,6 +3382,7 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [uploaded, setUploaded] = useState(false);
   function chooseFile(nextFile: File | null) {
     setError("");
     setFile(nextFile);
@@ -3402,10 +3403,14 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "No pudimos subir el comprobante.");
-      await onUploaded();
+      setUploaded(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No pudimos subir el comprobante.");
-    } finally { setBusy(false); }
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    try { await onUploaded(); } catch { /* El comprobante ya se guardó; Pedidos se actualizará al recargar. */ }
   }
   return <section className={`yape-payment${titleId ? " yape-payment-in-dialog" : ""}`} aria-label="Pago anticipado con Yape">
     <h3 id={titleId}>Completa tu pago con Yape</h3>
@@ -3414,7 +3419,7 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
       <div className="yape-qr-panel"><img className="yape-qr" src="/images/yape-fernando.jpeg" alt="QR de Yape de Fernando Wilder Altamirano Pinedo" /><a className="yape-download" href="/images/yape-fernando.jpeg" download="menuu-yape-fernando.jpeg"><Download size={17} aria-hidden="true" /> Descargar QR</a></div>
       <div className="yape-step-list"><p>Abre Yape y usa una de estas opciones:</p><ol><li><strong>Escanear QR</strong><span>Apunta la cámara al código desde otro dispositivo.</span></li><li><strong>Subir una imagen con QR</strong><span>Descarga la foto y súbela en Yape desde este celular.</span></li></ol><p>Comprueba el destinatario y el monto antes de pagar.</p></div>
     </div>
-    <div className="yape-upload-panel">
+    {uploaded ? <p className="yape-status" role="status">Comprobante enviado. El pago está pendiente de revisión.</p> : <div className="yape-upload-panel">
       <div><strong>Sube tu comprobante</strong><span>Imagen de hasta 3 MB</span></div>
       <label className={`yape-upload${file ? " yape-upload-selected" : ""}${dragging ? " is-dragging" : ""}`} {...dropProps}>
         <input className="sr-only" type="file" onChange={(event) => {
@@ -3427,7 +3432,7 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
       </label>
       <small className="yape-drop-hint">También puedes arrastrar la foto aquí.</small>
       <Button onClick={upload} disabled={!file || busy}>{busy ? "Subiendo…" : "Enviar comprobante"}</Button>
-    </div>
+    </div>}
     {error && <p className="form-error" role="alert">{error}</p>}
   </section>;
 }
