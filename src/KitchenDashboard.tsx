@@ -12,7 +12,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Star,
   X,
 } from "lucide-react";
 import { Button } from "./components/ui";
@@ -3515,7 +3514,6 @@ export function AdminDashboard({
 
 type AdminReview = {
   orderId: string;
-  rating: number;
   comment: string;
   createdAt: string;
   bannedAt: string | null;
@@ -3523,7 +3521,7 @@ type AdminReview = {
   kitchenName: string;
   studentName: string;
   code: string;
-  items: { name: string; imageUrl: string; quantity: number }[];
+  items: { id: string; name: string; imageUrl: string; quantity: number; rating: number | null }[];
 };
 type AdminReviewsData = {
   reviews: AdminReview[];
@@ -3564,7 +3562,7 @@ export function AdminReviewsDashboard({ user, onLogout }: { user: User; onLogout
 
   return <section className="page-section admin-dashboard admin-reviews" aria-label="Comentarios de las cocinas">
     <div className="page-heading admin-heading">
-      <div><span className="eyebrow">OPINIONES DE ESTUDIANTES</span><h1>Comentarios</h1><p>Gestiona la puntuación y el comentario de cada reseña como una sola unidad.</p></div>
+      <div><span className="eyebrow">OPINIONES DE ESTUDIANTES</span><h1>Comentarios</h1><p>Cada comida recibe estrellas. Al banear una reseña, se excluyen todas sus puntuaciones del promedio de la cocina.</p></div>
       <Button type="button" variant="secondary" onClick={onLogout}><BrandLogoutIcon size={18} /> Cerrar sesión</Button>
     </div>
     <div className="admin-review-controls">
@@ -3576,9 +3574,8 @@ export function AdminReviewsDashboard({ user, onLogout }: { user: User; onLogout
       <p className="admin-review-count">{data.total} {data.total === 1 ? "reseña" : "reseñas"} en esta selección</p>
       {data.reviews.length ? <div className="admin-review-list">{data.reviews.map((review) => <article className="admin-review-card" key={review.orderId}>
         <div className="admin-review-top"><div><strong>{review.kitchenName}</strong><span>{review.studentName} · {review.code}</span></div><span className={review.bannedAt ? "admin-review-banned" : "admin-review-visible"}>{review.bannedAt ? "Baneada" : "Visible"}</span></div>
-        <div className="kitchen-comment-stars" aria-label={`${review.rating} de 5 estrellas`}>{[1,2,3,4,5].map((star) => <Star key={star} size={16} fill={star <= review.rating ? "currentColor" : "none"} />)}</div>
         <p>“{review.comment || "Sin comentario anterior"}”</p>
-        <div className="kitchen-comment-items">{review.items.map((item, index) => <div key={`${review.orderId}-${index}`}><img src={item.imageUrl} alt="" loading="lazy" /><span>{item.quantity} × {item.name}</span></div>)}</div>
+        <div className="kitchen-comment-items">{review.items.map((item) => <div key={item.id}><img src={item.imageUrl} alt="" loading="lazy" /><span>{item.quantity} × {item.name}{item.rating && <strong>★ {item.rating}/5</strong>}</span></div>)}</div>
         <Button type="button" variant="secondary" disabled={busy === review.orderId} onClick={() => moderate(review)}>{busy === review.orderId ? "Guardando…" : review.bannedAt ? "Restaurar reseña" : "Banear reseña"}</Button>
       </article>)}</div> : <p className="km-empty">No hay comentarios en esta selección.</p>}
       {data.total > 10 && <nav className="km-pagination" aria-label="Páginas de comentarios"><Button type="button" variant="secondary" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>Anterior</Button><span>Página {page + 1} de {Math.ceil(data.total / 10)}</span><Button type="button" variant="secondary" disabled={(page + 1) * 10 >= data.total} onClick={() => setPage((current) => current + 1)}>Siguiente</Button></nav>}

@@ -393,25 +393,36 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     assert.equal((await pendingReviewPrompt(consumers[0].id)).orderId, order.id);
     await markReviewPromptSeen(consumers[0].id, order.id);
     assert.equal(await pendingReviewPrompt(consumers[0].id), null);
+    const extraReviewItem = (await db.query(
+      `INSERT INTO order_items (order_id,offer_id,dish_name,image_url,quantity,unit_price_cents,total_cents,sort_order)
+       SELECT order_id,offer_id,'Otra comida',image_url,1,unit_price_cents,unit_price_cents,99
+       FROM order_items WHERE id=$1 RETURNING id`,
+      [order.items[0].id],
+    )).rows[0].id;
+    await assert.rejects(submitReview(consumers[0].id, order.id, {
+      foodRatings: [{ orderItemId: order.items[0].id, rating: 4 }], comment: "Muy rico.",
+    }), /Califica cada comida/);
     await submitReview(
       consumers[0].id,
       order.id,
       {
-        kitchenRating: 5,
+        foodRatings: [{ orderItemId: order.items[0].id, rating: 4 }, { orderItemId: extraReviewItem, rating: 2 }],
         comment: "Muy rico el almuerzo.",
       },
     );
     await assert.rejects(submitReview(consumers[0].id, order.id, {
-      kitchenRating: 5, comment: "x".repeat(101),
+      foodRatings: order.items.map((item) => ({ orderItemId: item.id, rating: 4 })), comment: "x".repeat(101),
     }), /100 caracteres/);
     assert.equal(
       (await getCatalog()).kitchens.find((item) => item.id === "test-kitchen")
         .rating,
-      5,
+      3,
     );
     const publicReviews = await recentKitchenReviews("test-kitchen");
     assert.equal(publicReviews.reviews[0].comment, "Muy rico el almuerzo.");
     assert.equal(publicReviews.reviews[0].items[0].name, order.items[0].name);
+    assert.equal(publicReviews.reviews[0].items[0].rating, 4);
+    assert.equal(publicReviews.reviews[0].items[1].rating, 2);
     assert.equal((await adminReviews()).reviews[0].orderId, order.id);
     await moderateReview(order.id, "payment-reviewer", "ban");
     assert.equal((await getCatalog()).kitchens.find((item) => item.id === "test-kitchen").rating, null);
@@ -419,7 +430,10 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     assert.equal((await adminReviews({ status: "visible" })).total, 0);
     assert.equal((await adminReviews({ status: "banned" })).reviews[0].orderId, order.id);
     await moderateReview(order.id, "payment-reviewer", "restore");
-    assert.equal((await getCatalog()).kitchens.find((item) => item.id === "test-kitchen").rating, 5);
+    assert.equal((await getCatalog()).kitchens.find((item) => item.id === "test-kitchen").rating, 3);
+    await db.query("DELETE FROM order_item_reviews WHERE order_item_id=$1", [extraReviewItem]);
+    await db.query("DELETE FROM order_items WHERE id=$1", [extraReviewItem]);
+    assert.equal((await getCatalog()).kitchens.find((item) => item.id === "test-kitchen").rating, 4);
     assert.deepEqual((await db.query("SELECT action FROM review_moderation_events WHERE order_id=$1 ORDER BY created_at,rowid", [order.id])).rows.map((row) => row.action), ["ban", "restore"]);
     const server = createServer(handleRequest);
 

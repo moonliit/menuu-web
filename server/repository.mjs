@@ -143,9 +143,10 @@ export async function getCatalog(now = new Date()) {
       [start],
     ),
     getDb()
-      .query(`SELECT o.kitchen_id AS "kitchenId", round(avg(r.kitchen_rating),1) AS rating,
+      .query(`SELECT o.kitchen_id AS "kitchenId", round(avg(ir.food_rating),1) AS rating,
       count(DISTINCT o.user_id) AS "ratingCount"
-      FROM order_reviews r JOIN orders o ON o.id=r.order_id
+      FROM order_item_reviews ir JOIN order_reviews r ON r.order_id=ir.order_id
+      JOIN orders o ON o.id=r.order_id
       WHERE o.status='reservado' AND o.fulfillment_status='delivered' AND r.banned_at IS NULL GROUP BY o.kitchen_id`),
   ]);
   const kitchenNames = new Map(
@@ -381,7 +382,7 @@ export async function getOrders(userId, page = null) {
   for (const row of itemsResult.rows) {
     if (!items.has(row.orderId)) items.set(row.orderId, []);
     items.get(row.orderId).push({
-      id: row.id,
+      id: String(row.id),
       offeringId: row.offeringId,
       name: row.name,
       imageUrl: row.imageUrl,
@@ -431,17 +432,15 @@ export async function getOrdersPage(userId, { limit = 10, offset = 0 } = {}) {
 }
 
 export async function submitReview(userId, orderId, payload) {
-  const kitchenRating = Number(payload?.kitchenRating);
+  const foodRatings = payload?.foodRatings;
   const comment = typeof payload?.comment === "string"
     ? payload.comment.trim().replace(/\s+/g, " ")
     : "";
 
-  if (
-    !Number.isInteger(kitchenRating) ||
-    kitchenRating < 1 ||
-    kitchenRating > 5
-  )
-    throw invalid("Califica la cocina de 1 a 5 estrellas.");
+  if (!Array.isArray(foodRatings) || !foodRatings.length || foodRatings.some(
+    (item) => !item || !/^\d+$/.test(String(item.orderItemId)) ||
+      !Number.isInteger(item.rating) || item.rating < 1 || item.rating > 5,
+  )) throw invalid("Califica cada comida de 1 a 5 estrellas.");
 
   if (!comment || comment.length > 100 || /[\u0000-\u001f\u007f]/.test(comment))
     throw invalid("Escribe un comentario de hasta 100 caracteres.");
@@ -471,10 +470,23 @@ export async function submitReview(userId, orderId, payload) {
       ).rowCount
     )
       throw invalid("Ya calificaste este pedido.", 409);
+    const items = (await client.query("SELECT id FROM order_items WHERE order_id=$1", [orderId])).rows;
+    const itemIds = new Set(items.map((item) => String(item.id)));
+    const ratedIds = new Set(foodRatings.map((item) => String(item.orderItemId)));
+    if (ratedIds.size !== itemIds.size || foodRatings.length !== itemIds.size ||
+        [...ratedIds].some((id) => !itemIds.has(id)))
+      throw invalid("Califica cada comida de este pedido una sola vez.");
+    const average = Math.round(foodRatings.reduce((sum, item) => sum + item.rating, 0) / foodRatings.length);
     await client.query(
       "INSERT INTO order_reviews (order_id,kitchen_rating,comment) VALUES ($1,$2,$3)",
-      [orderId, kitchenRating, comment],
+      [orderId, average, comment],
     );
+    for (const item of foodRatings) {
+      await client.query(
+        "INSERT INTO order_item_reviews (order_item_id,order_id,food_rating) VALUES ($1,$2,$3)",
+        [item.orderItemId, orderId, item.rating],
+      );
+    }
 
     return { ok: true };
   });

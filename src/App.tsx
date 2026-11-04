@@ -3255,14 +3255,14 @@ type ReviewableOrder = {
   orderId: string;
   kitchenName: string;
   code: string;
-  items: { name: string; imageUrl: string; quantity: number }[];
+  items: { id: string; name: string; imageUrl: string; quantity: number; rating?: number | null }[];
 };
 
 function KitchenReviewForm({ review, onSaved }: {
   review: ReviewableOrder;
   onSaved: () => Promise<void>;
 }) {
-  const [rating, setRating] = useState(0);
+  const [foodRatings, setFoodRatings] = useState<Record<string, number>>({});
   const [comment, setComment] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -3272,7 +3272,10 @@ function KitchenReviewForm({ review, onSaved }: {
     setSaving(true);
     setError("");
     try {
-      await api(`/api/orders/${review.orderId}/review`, { kitchenRating: rating, comment });
+      await api(`/api/orders/${review.orderId}/review`, {
+        foodRatings: review.items.map((item) => ({ orderItemId: item.id, rating: foodRatings[item.id] })),
+        comment,
+      });
       await onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No pudimos guardar tu reseña.");
@@ -3283,18 +3286,21 @@ function KitchenReviewForm({ review, onSaved }: {
 
   return <form className="review-form" onSubmit={submit}>
     <h3>¿Qué tal estuvo la sazón?</h3>
-    <p>Califica a {review.kitchenName} por tu pedido {review.code}.</p>
+    <p>Califica cada comida de tu pedido {review.code}. El promedio se reflejará en la puntuación de {review.kitchenName}.</p>
     <div className="review-ordered-items">
-      {review.items.map((item, index) => <span key={`${item.name}-${index}`}>{item.quantity} × {item.name}</span>)}
+      {review.items.map((item) => <div key={item.id}>
+        <img src={item.imageUrl} alt="" />
+        <RatingInput label={`${item.quantity} × ${item.name}`} value={foodRatings[item.id] || 0}
+          onChange={(rating) => setFoodRatings((current) => ({ ...current, [item.id]: rating }))} disabled={saving} />
+      </div>)}
     </div>
-    <RatingInput label={`Cocina ${review.kitchenName}`} value={rating} onChange={setRating} disabled={saving} />
     <label className="review-comment-field">Tu comentario
       <textarea value={comment} maxLength={100} rows={3} required disabled={saving} onChange={(event) => setComment(event.target.value)} placeholder="Cuéntanos qué te gustó de su sazón" />
       <small>{comment.length}/100 caracteres</small>
     </label>
-    <p className="review-public-note">Tu comentario y los platos de este pedido aparecerán sin tu nombre en la página de la cocina.</p>
+    <p className="review-public-note">Tu comentario, las puntuaciones y los platos de este pedido aparecerán sin tu nombre en la página de la cocina.</p>
     {error && <p className="form-error" role="alert">{error}</p>}
-    <Button type="submit" disabled={saving || rating === 0 || !comment.trim()}>{saving ? "Guardando…" : "Enviar reseña"} <ArrowRight size={18} /></Button>
+    <Button type="submit" disabled={saving || review.items.some((item) => !foodRatings[item.id]) || !comment.trim()}>{saving ? "Guardando…" : "Enviar reseña"} <ArrowRight size={18} /></Button>
   </form>;
 }
 
@@ -3315,7 +3321,6 @@ function ReviewPromptDialog({ review, onClose, onSaved }: {
 }
 
 type PublicKitchenReview = Pick<ReviewableOrder, "orderId" | "items"> & {
-  rating: number;
   comment: string;
   createdAt: string;
 };
@@ -3337,9 +3342,8 @@ function KitchenCommentsDialog({ kitchen, onClose }: { kitchen: Kitchen; onClose
     <span className="eyebrow">OPINIONES DE ESTUDIANTES</span>
     <h2 id="kitchen-comments-title">Comentarios de {kitchen.name}</h2>
     {loading ? <p role="status">Cargando comentarios…</p> : error ? <p className="form-error" role="alert">{error}</p> : reviews.length ? <div className="kitchen-comments-list">{reviews.map((review) => <article key={review.orderId} className="kitchen-comment-card">
-      <div className="kitchen-comment-stars" aria-label={`${review.rating} de 5 estrellas`}>{[1,2,3,4,5].map((star) => <Star key={star} size={16} fill={star <= review.rating ? "currentColor" : "none"} />)}</div>
       <p>{review.comment}</p>
-      <div className="kitchen-comment-items">{review.items.map((item, index) => <div key={`${review.orderId}-${index}`}><img src={item.imageUrl} alt="" loading="lazy" /><span>{item.quantity} × {item.name}</span></div>)}</div>
+      <div className="kitchen-comment-items">{review.items.map((item) => <div key={item.id}><img src={item.imageUrl} alt="" loading="lazy" /><span>{item.quantity} × {item.name}{item.rating && <strong>★ {item.rating}/5</strong>}</span></div>)}</div>
     </article>)}</div> : <p>Aún no hay comentarios para esta cocina.</p>}
   </dialog>, document.body);
 }
@@ -3518,8 +3522,7 @@ function OrderCard({
       )}
       {order.kitchenRating !== null && (
         <div className="review-saved">
-          <Star size={17} fill="currentColor" aria-hidden="true" /> Calificaste
-          a {order.kitchenName} con {order.kitchenRating}/5.
+          <Star size={17} fill="currentColor" aria-hidden="true" /> Calificaste la comida de {order.kitchenName}.
           {order.kitchenComment && <span>“{order.kitchenComment}”</span>}
         </div>
       )}

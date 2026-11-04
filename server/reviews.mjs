@@ -8,8 +8,10 @@ const fail = (message, status = 400) => {
 async function itemsForReviews(client, reviews) {
   if (!reviews.length) return reviews;
   const items = await client.query(
-    `SELECT order_id AS "orderId",dish_name AS name,image_url AS "imageUrl",quantity
-     FROM order_items WHERE order_id=ANY($1::text[]) ORDER BY sort_order,id`,
+    `SELECT i.id,i.order_id AS "orderId",i.dish_name AS name,i.image_url AS "imageUrl",i.quantity,
+      ir.food_rating AS rating
+     FROM order_items i LEFT JOIN order_item_reviews ir ON ir.order_item_id=i.id
+     WHERE i.order_id=ANY($1::text[]) ORDER BY i.sort_order,i.id`,
     [reviews.map((review) => review.orderId)],
   );
   const byOrder = new Map();
@@ -17,9 +19,11 @@ async function itemsForReviews(client, reviews) {
   for (const item of items.rows) {
     if (!byOrder.has(item.orderId)) byOrder.set(item.orderId, []);
     byOrder.get(item.orderId).push({
+      id: String(item.id),
       name: item.name,
       imageUrl: item.imageUrl,
       quantity: item.quantity,
+      rating: item.rating,
     });
   }
 
@@ -57,7 +61,7 @@ export async function recentKitchenReviews(kitchenId) {
   const kitchen = await getDb().query("SELECT id FROM kitchens WHERE id=$1", [kitchenId]);
   if (!kitchen.rowCount) fail("Cocina no encontrada.", 404);
   const result = await getDb().query(
-    `SELECT r.order_id AS "orderId",r.kitchen_rating AS rating,r.comment,r.created_at AS "createdAt"
+    `SELECT r.order_id AS "orderId",r.comment,r.created_at AS "createdAt"
      FROM order_reviews r JOIN orders o ON o.id=r.order_id
      WHERE o.kitchen_id=$1 AND o.status='reservado' AND o.fulfillment_status='delivered'
        AND r.banned_at IS NULL AND trim(r.comment)<>''
@@ -76,7 +80,7 @@ export async function adminReviews({ kitchen = "all", status = "all", limit = 20
     ($2='all' OR ($2='visible' AND r.banned_at IS NULL) OR ($2='banned' AND r.banned_at IS NOT NULL))`;
   const [rows, count, kitchens] = await Promise.all([
     getDb().query(
-      `SELECT r.order_id AS "orderId",r.kitchen_rating AS rating,r.comment,
+      `SELECT r.order_id AS "orderId",r.comment,
        r.created_at AS "createdAt",r.banned_at AS "bannedAt",r.banned_by AS "bannedBy",
        o.kitchen_id AS "kitchenId",o.kitchen_name AS "kitchenName",o.code,
        u.name AS "studentName"
