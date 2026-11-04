@@ -2161,6 +2161,75 @@
   font-weight: 500;
   color: var(--color-muted);
 }
+.km-dish-fields { display: grid; gap: 16px; }
+.km-form-section {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+}
+.km-form-section-primary { background: var(--color-background); }
+.km-form-section-optional { margin-top: 16px; border-style: dashed; background: #f4f8ef; }
+.km-dish-fields .km-form-section-optional { margin-top: 0; }
+.km-form-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin-bottom: 17px;
+}
+.km-form-section-head > svg {
+  flex: none;
+  box-sizing: content-box;
+  padding: 10px;
+  border-radius: 13px;
+  background: var(--color-orange-soft);
+  color: var(--color-brand);
+}
+.km-form-section-optional .km-form-section-head > svg { background: #e2eddb; }
+.km-form-section-head h3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0;
+  color: var(--color-text);
+  font: 500 21px/1.2 var(--font-display);
+}
+.km-form-section-head h3 span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #e2eddb;
+  color: var(--color-brand);
+  font: 600 11px/1.2 var(--font-body);
+}
+.km-form-section-head p {
+  margin: 3px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.km-form-section .km-form-grid { gap: 14px; }
+.km-form-section-optional .km-optional-tag { color: var(--color-brand); }
+.km-form-section-optional > .km-check { margin-top: 14px; }
+.km-base-price { color: var(--color-brand) !important; font-size: 13px; }
+.km-options-intro {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-border);
+  border-radius: 14px;
+  background: #f4f8ef;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.km-options-intro svg { flex: none; color: var(--color-brand); }
+@media (max-width: 600px) {
+  .km-form-section { padding: 14px; }
+  .km-form-section-head h3 { font-size: 19px; }
+}
 .km-dish-summary {
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr) auto;

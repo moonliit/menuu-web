@@ -12,6 +12,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Info,
   X,
 } from "lucide-react";
 import { Button } from "./components/ui";
@@ -2409,7 +2410,9 @@ export default function KitchenDashboard({
       </button>
     </div>
   );
-  const renderOfferEditor = (offer: Offer, data: Data) => (
+  const renderOfferEditor = (offer: Offer, data: Data) => {
+    const basePrice = data.dishes.find((item) => item.id === offer.dishId)?.priceSoles;
+    return (
     <form
       className="km-editor"
       onSubmit={(event) => {
@@ -2519,15 +2522,22 @@ export default function KitchenDashboard({
             }
           />
         </label>
+      </div>
+      <section className="km-form-section km-form-section-optional" aria-labelledby="offer-optional-title">
+        <div className="km-form-section-head">
+          <Info size={21} aria-hidden="true" />
+          <div><h3 id="offer-optional-title">Detalles para este día <span>Opcional</span></h3><p>Si los dejas vacíos, se usarán los datos del plato.</p></div>
+        </div>
+        <div className="km-form-grid">
         <label>
-          Precio especial S/ <small>Opcional</small>
+          <span className="km-field-label">Precio especial S/ <small className="km-optional-tag">Opcional</small></span>
           <input
             type="number"
             min={0}
             max={1000}
             step="0.01"
             value={offer.priceSoles ?? ""}
-            placeholder="Usar precio del plato"
+            placeholder={basePrice === undefined ? "Selecciona un plato" : basePrice.toFixed(2)}
             onChange={(event) =>
               setOffer({
                 ...offer,
@@ -2537,6 +2547,7 @@ export default function KitchenDashboard({
               })
             }
           />
+          {basePrice !== undefined && <small className="km-base-price">Precio base del plato: {money(basePrice)}</small>}
         </label>
         <label className="km-wide">
           Descripción para este día{" "}
@@ -2556,7 +2567,7 @@ export default function KitchenDashboard({
             placeholder="Si hoy el plato tiene un detalle distinto"
           />
         </label>
-      </div>
+        </div>
       <label className="km-check">
         <input
           type="checkbox"
@@ -2585,6 +2596,7 @@ export default function KitchenDashboard({
           }
         />
       )}
+      </section>
       <div className="km-form-actions">
         <Button
           type="button"
@@ -2598,7 +2610,8 @@ export default function KitchenDashboard({
         </Button>
       </div>
     </form>
-  );
+    );
+  };
   return (
     <section className="km-shell">
       <div className="km-heading">
@@ -2787,6 +2800,12 @@ export default function KitchenDashboard({
                     </div>
                   </div>
                   {dishStep === 1 ? (
+                    <div className="km-dish-fields">
+                    <section className="km-form-section km-form-section-primary" aria-labelledby="dish-primary-title">
+                      <div className="km-form-section-head">
+                        <BrandDishIcon size={23} aria-hidden="true" />
+                        <div><h3 id="dish-primary-title">Lo esencial del plato</h3><p>Nombre, precio y foto para mostrarlo en el menú.</p></div>
+                      </div>
                     <div className="km-form-grid">
                       <label>
                         <span className="km-field-label">
@@ -2838,24 +2857,6 @@ export default function KitchenDashboard({
                           placeholder="Ej. 11.00"
                         />
                       </label>
-                      <label className="km-wide">
-                        <span className="km-field-label">
-                          Descripción{" "}
-                          <small>Opcional · {dish.description.length}/90</small>
-                        </span>
-                        <textarea
-                          maxLength={90}
-                          rows={2}
-                          value={dish.description}
-                          onChange={(event) =>
-                            setDish({
-                              ...dish,
-                              description: event.target.value,
-                            })
-                          }
-                          placeholder="Cuenta qué lleva o si incluye postre o bebida"
-                        />
-                      </label>
                       <div className={`km-wide km-photo-field${dishDrop.dragging ? " is-dragging" : ""}`} {...dishDrop.dropProps}>
                         <span>
                           Foto del plato{" "}
@@ -2898,6 +2899,32 @@ export default function KitchenDashboard({
                           />
                         )}
                       </div>
+                    </div>
+                    </section>
+                    <section className="km-form-section km-form-section-optional" aria-labelledby="dish-optional-title">
+                      <div className="km-form-section-head">
+                        <Info size={21} aria-hidden="true" />
+                        <div><h3 id="dish-optional-title">Dale más contexto <span>Opcional</span></h3><p>Ayuda a que los estudiantes sepan qué recibirán.</p></div>
+                      </div>
+                    <div className="km-form-grid">
+                      <label className="km-wide">
+                        <span className="km-field-label">
+                          Descripción{" "}
+                          <small className="km-optional-tag">Opcional · {dish.description.length}/90</small>
+                        </span>
+                        <textarea
+                          maxLength={90}
+                          rows={2}
+                          value={dish.description}
+                          onChange={(event) =>
+                            setDish({
+                              ...dish,
+                              description: event.target.value,
+                            })
+                          }
+                          placeholder="Cuenta qué lleva o si incluye postre o bebida"
+                        />
+                      </label>
                       <label className="km-wide">
                         <span className="km-field-label">
                           Texto alternativo de la foto{" "}
@@ -2923,6 +2950,8 @@ export default function KitchenDashboard({
                         Plato activo para futuros menús
                       </label>
                     </div>
+                    </section>
+                    </div>
                   ) : (
                     <>
                       <div className="km-dish-summary">
@@ -2944,6 +2973,7 @@ export default function KitchenDashboard({
                           Editar datos
                         </Button>
                       </div>
+                      <div className="km-options-intro"><Info size={19} aria-hidden="true" /><span>La personalización es opcional. Puedes guardar el plato sin añadir opciones.</span></div>
                       <OptionEditor
                         groups={dish.customization}
                         onChange={(customization) =>
