@@ -481,8 +481,9 @@ function OfferingCard({
   onKitchen: (id: string) => void;
 }) {
   const soldOut = offer.remaining <= 0;
+  const closedWithStock = !offer.bookable && !soldOut;
   return (
-    <article className="offer-card">
+    <article className={`offer-card${closedWithStock ? " offer-card-closed" : ""}`}>
       <div className="offer-photo">
         <img src={offer.imageUrl} alt={offer.imageAlt} loading="lazy" />
         {highlight && (
@@ -553,14 +554,12 @@ function OfferingCard({
             {offer.bookable && <ArrowRight size={17} />}
           </Button>
         </div>
-        <span className={`offer-stock${soldOut ? " offer-stock-soldout" : ""}`}>
+        <span className={`offer-stock${soldOut ? " offer-stock-soldout" : closedWithStock ? " offer-stock-walk-in" : ""}`}>
           {soldOut
             ? "¡Sold out!"
             : offer.bookable
               ? `${offer.remaining} ${offer.remaining === 1 ? "porción disponible" : "porciones disponibles"}`
-              : offer.remaining > 0
-                ? "¡Ve al punto de encuentro! ¡Venta presencial!"
-                : ""}
+              : `${offer.remaining} ${offer.remaining === 1 ? "porción disponible" : "porciones disponibles"}, ¡venta presencial!`}
         </span>
       </div>
     </article>
@@ -1394,6 +1393,14 @@ function featuredCopy(
   offer: Offering,
   index: number,
 ): Pick<FeaturedSlide, "titleLines" | "descriptionLines"> {
+  if (!offer.bookable)
+    return {
+      titleLines: ["Tu break pide", "algo rico."],
+      descriptionLines: [
+        "Aún quedan porciones para hoy.",
+        "Acércate al punto de encuentro.",
+      ],
+    };
   const dish = offer.name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -1835,14 +1842,27 @@ export default function App() {
       row.kitchenId,
       (kitchenSales.get(row.kitchenId) || 0) + row.units,
     );
-  const nextMenuDate = nextBookableDate(offers, limaToday());
+  const today = limaToday();
+  const nextMenuDate = offers.some(
+    (offer) => offer.date === today && offer.remaining > 0,
+  )
+    ? today
+    : nextBookableDate(offers, today);
   const menuOffers = kitchenFilter
     ? offers.filter((offer) => offer.kitchenId === kitchenFilter)
     : offers;
-  const nextFilteredMenuDate = nextBookableDate(menuOffers, limaToday());
+  const nextFilteredMenuDate = menuOffers.some(
+    (offer) => offer.date === today && offer.remaining > 0,
+  )
+    ? today
+    : nextBookableDate(menuOffers, today);
   const hideCurrentWeek =
     state !== null &&
-    !menuOffers.some((offer) => offer.week === 0 && offer.bookable);
+    !menuOffers.some(
+      (offer) =>
+        offer.week === 0 &&
+        (offer.bookable || (offer.date === today && offer.remaining > 0)),
+    );
   const featuredWeek =
     offers.find((offer) => offer.date === nextMenuDate)?.week ?? 0;
   const featuredWeekName =
@@ -1890,7 +1910,11 @@ export default function App() {
   );
   const dishCandidates = new Map<string, Offering>();
   for (const offer of offers
-    .filter((offer) => offer.date === nextMenuDate && offer.bookable)
+    .filter(
+      (offer) =>
+        offer.date === nextMenuDate &&
+        (offer.bookable || (offer.date === today && offer.remaining > 0)),
+    )
     .sort(
       (a, b) => a.date.localeCompare(b.date) || a.sortOrder - b.sortOrder,
     )) {
@@ -2059,10 +2083,13 @@ export default function App() {
   function changeWeek(next: number) {
     setMenuFilterManual(true);
     setWeek(next);
-    const firstDate = nextBookableDate(
-      menuOffers.filter((offer) => offer.week === next),
-      limaToday(),
-    );
+    const firstDate =
+      next === 0 && nextFilteredMenuDate === today
+        ? today
+        : nextBookableDate(
+            menuOffers.filter((offer) => offer.week === next),
+            today,
+          );
     setDayFilter(
       firstDate ? new Date(`${firstDate}T12:00:00Z`).getUTCDay() - 1 : null,
     );
@@ -2453,7 +2480,9 @@ export default function App() {
                       {hasWeeklyBookings
                         ? `Ordenados por porciones reservadas de ${featuredWeekName}.`
                         : topDishes.length
-                          ? "Estos platos tienen reservas disponibles para ese día."
+                          ? nextMenuDate === today
+                            ? "Estos platos aún tienen porciones disponibles para hoy."
+                            : "Estos platos tienen reservas disponibles para ese día."
                           : "Aquí aparecerán los platos cuando las cocinas publiquen sus menús."}
                     </p>
                   </div>

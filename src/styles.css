@@ -1360,6 +1360,9 @@ p {
   overflow: hidden;
   box-shadow: var(--shadow-card);
 }
+.offer-card-closed {
+  background: var(--color-orange-soft);
+}
 .offer-photo {
   position: relative;
   aspect-ratio: 1.5;
@@ -1563,6 +1566,10 @@ p {
 }
 .offer-stock-soldout {
   color: var(--color-orange-ink);
+  font-weight: 600;
+}
+.offer-stock-walk-in {
+  color: var(--color-brand);
   font-weight: 600;
 }
 .offer-deadline-ended {
