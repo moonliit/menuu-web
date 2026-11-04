@@ -108,6 +108,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
   const { submitPaymentProof, reviewPayment, pendingPayments, expireUnpaidCheckouts, paymentProof } = await import("../server/payments.mjs");
   const { adminReviews, markReviewPromptSeen, moderateReview, pendingReviewPrompt, recentKitchenReviews } = await import("../server/reviews.mjs");
   const { clearExpiredFridgePhotos, fridgeNotices, fridgePhoto, leaveOrderInFridge } = await import("../server/fridge.mjs");
+  const { activePlaceholders, addPlaceholder, linkPlaceholder, removePlaceholder } = await import("../server/placeholders.mjs");
 
   try {
     const migrationDb = getDb();
@@ -1547,6 +1548,25 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     assert.equal((await kitchenStudentCandidates("test-kitchen", hourOffer, "pre@")).find((student) => student.id === manualStudentId)?.alreadyAdded, false);
     assert.equal((await db.query("SELECT actor_user_id AS actor FROM kitchen_reservation_events WHERE order_id=$1 AND action='manual_remove'", [accidental.orderId])).rows[0].actor, "admin-actor");
     await assert.rejects(removeKitchenReservation("test-kitchen", "admin-actor", { orderId: accidental.orderId }), { status: 409 });
+    const provisional = await addPlaceholder("test-kitchen", "kitchen-actor", { offerId: hourOffer, name: "Persona por registrar", quantity: 1 });
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [hourOffer])).rows[0].count, 1);
+    assert.equal((await getCatalog()).offerings.find((offer) => offer.id === hourOffer).remaining, 0);
+    assert.equal((await activePlaceholders([hourOffer]))[0].name, "Persona por registrar");
+    await assert.rejects(removePlaceholder("another-kitchen", "admin-actor", { placeholderId: provisional.id }), { status: 404 });
+    await removePlaceholder("test-kitchen", "admin-actor", { placeholderId: provisional.id });
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [hourOffer])).rows[0].count, 0);
+    const waiting = await addPlaceholder("test-kitchen", "kitchen-actor", { offerId: hourOffer, name: "Estudiante futura", quantity: 1 });
+    const futureStudentId = randomUUID();
+    await insertUser({ id: futureStudentId, name: "Estudiante futura", email: "futura@utec.edu.pe", passwordHash: hashPassword("clave-segura"), role: "consumer", studentCode: "999123456", career: "Ciencia de la Computación", birthDate: null });
+    await assert.rejects(linkPlaceholder("another-kitchen", "admin-actor", { placeholderId: waiting.id, studentId: futureStudentId }), { status: 404 });
+    const linked = await linkPlaceholder("test-kitchen", "admin-actor", { placeholderId: waiting.id, studentId: futureStudentId });
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [hourOffer])).rows[0].count, 1);
+    assert.equal((await activePlaceholders([hourOffer])).length, 0);
+    assert.equal((await getOrders(futureStudentId)).some((order) => order.id === linked.orderId), true);
+    assert.equal((await kitchenData("test-kitchen")).reservations.find((item) => item.orderId === linked.orderId)?.manualAdded, true);
+    await assert.rejects(linkPlaceholder("test-kitchen", "admin-actor", { placeholderId: waiting.id, studentId: futureStudentId }), { status: 409 });
+    await removeKitchenReservation("test-kitchen", "admin-actor", { orderId: linked.orderId });
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [hourOffer])).rows[0].count, 0);
     const deliveredManual = (await db.query(
       `SELECT r.id,r.user_id AS "userId",i.offer_id AS "offerId",i.delivered_quantity AS units
        FROM orders r JOIN order_items i ON i.order_id=r.id
@@ -1561,7 +1581,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [deliveredManual.offerId])).rows[0].count, beforeDeliveredRemoval - deliveredManual.units);
     assert.equal((await getOrders(deliveredManual.userId)).some((order) => order.id === deliveredManual.id), false);
     console.log(
-      "libSQL: migración, reserva, Yape, aprobación, porción adicional, anulación manual y vencimiento correctos.",
+      "libSQL: migración, reserva, Yape, aprobación, porción adicional, persona provisional, anulación manual y vencimiento correctos.",
     );
   } finally {
     await closeDb();

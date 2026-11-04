@@ -90,6 +90,13 @@ type KitchenReservation = {
   fridgeAt: string | null;
   fridgePhone: string | null;
 };
+type PlaceholderReservation = {
+  id: string;
+  offerId: string;
+  name: string;
+  quantity: number;
+  createdAt: string;
+};
 type ReservationState = "pending" | "fridge" | "delivered" | "cancelled";
 const limaDeliveryInput = (value: string) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -177,6 +184,7 @@ type Data = {
   dishes: Dish[];
   offers: Offer[];
   reservations: KitchenReservation[];
+  placeholders: PlaceholderReservation[];
   analytics: {
     offers: StatOffer[];
     bookingHours: { hour: number; units: number }[];
@@ -887,6 +895,7 @@ function KitchenMenuRow({
 function KitchenReservationPanel({
   offer,
   reservations,
+  placeholders,
   onChanged,
   onClose,
   apiPrefix = "/api/kitchen",
@@ -896,11 +905,16 @@ function KitchenReservationPanel({
     "id" | "date" | "deliveryTime" | "pickupUntil" | "capacity" | "reservedCount"
   >;
   reservations: KitchenReservation[];
+  placeholders: PlaceholderReservation[];
   onChanged: () => Promise<void>;
   onClose: () => void;
   apiPrefix?: "/api/kitchen" | "/api/admin";
 }) {
   const [search, setSearch] = useState("");
+  const [placeholderName, setPlaceholderName] = useState("");
+  const [placeholderQuantity, setPlaceholderQuantity] = useState("1");
+  const [linkingPlaceholderId, setLinkingPlaceholderId] = useState<string | null>(null);
+  const [removingPlaceholderId, setRemovingPlaceholderId] = useState<string | null>(null);
   const [students, setStudents] = useState<
     { id: string; name: string; email: string; alreadyAdded: boolean }[]
   >([]);
@@ -1036,6 +1050,53 @@ function KitchenReservationPanel({
           ? cause.message
           : "No pudimos añadir la reserva.",
       );
+    } finally {
+      setBusyOrder("");
+    }
+  }
+  async function addProvisional(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusyOrder("placeholder-add");
+    setError("");
+    try {
+      await request(`${apiPrefix}/placeholders/add`, {
+        offerId: offer.id, name: placeholderName.trim(), quantity: Number(placeholderQuantity),
+      });
+      await onChanged();
+      setPlaceholderName("");
+      setPlaceholderQuantity("1");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No pudimos apartar las porciones.");
+    } finally {
+      setBusyOrder("");
+    }
+  }
+  async function linkProvisional(studentId: string) {
+    if (!linkingPlaceholderId) return;
+    setBusyOrder(linkingPlaceholderId);
+    setError("");
+    try {
+      await request(`${apiPrefix}/placeholders/link`, { placeholderId: linkingPlaceholderId, studentId });
+      await onChanged();
+      setLinkingPlaceholderId(null);
+      setSearch("");
+      setRefreshStudents((value) => value + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No pudimos vincular la cuenta.");
+    } finally {
+      setBusyOrder("");
+    }
+  }
+  async function removeProvisional(id: string) {
+    setBusyOrder(id);
+    setError("");
+    try {
+      await request(`${apiPrefix}/placeholders/remove`, { placeholderId: id });
+      await onChanged();
+      setRemovingPlaceholderId(null);
+      if (linkingPlaceholderId === id) setLinkingPlaceholderId(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No pudimos liberar las porciones.");
     } finally {
       setBusyOrder("");
     }
@@ -1198,6 +1259,7 @@ function KitchenReservationPanel({
           <p>
             {activeReservations.length} reservas activas · {offer.reservedCount}{" "}
             de {offer.capacity} porciones
+            {placeholders.length > 0 && ` · ${placeholders.reduce((sum, item) => sum + item.quantity, 0)} apartadas sin cuenta`}
             {reservations.length > activeReservations.length &&
               ` · ${reservations.length - activeReservations.length} canceladas`}
           </p>
@@ -1456,17 +1518,27 @@ function KitchenReservationPanel({
           )}
         </div>
       ) : (
-        <p className="km-empty">Aún no hay reservas en este menú.</p>
+        <p className="km-empty">{placeholders.length ? "Aún no hay pedidos vinculados a cuentas en este menú." : "Aún no hay reservas en este menú."}</p>
       )}
+      {placeholders.length > 0 && <div className="km-placeholder-list" aria-label="Personas sin cuenta">
+        <h3>Personas sin cuenta</h3>
+        {placeholders.map((person) => <article className="km-placeholder-card" key={person.id}>
+          <div><strong>{person.name}</strong><small>{person.quantity} {person.quantity === 1 ? "porción apartada" : "porciones apartadas"} · pendiente de vincular</small></div>
+          <div className="km-placeholder-actions">
+            <Button variant="secondary" disabled={!!busyOrder} onClick={() => { setLinkingPlaceholderId(person.id); setSearch(""); setStudentPage(0); }}>Vincular cuenta</Button>
+            {removingPlaceholderId === person.id ? <div className="km-placeholder-confirm"><span>¿Liberar {person.quantity} {person.quantity === 1 ? "porción" : "porciones"}?</span><Button variant="secondary" disabled={!!busyOrder} onClick={() => setRemovingPlaceholderId(null)}>Volver</Button><Button disabled={!!busyOrder} onClick={() => removeProvisional(person.id)}>{busyOrder ? "Liberando…" : "Sí, liberar"}</Button></div> : <button type="button" className="km-remove-manual" disabled={!!busyOrder} aria-label={`Eliminar persona provisional ${person.name}`} onClick={() => setRemovingPlaceholderId(person.id)}><X size={18} aria-hidden="true" /></button>}
+          </div>
+        </article>)}
+      </div>}
       <div className="km-reservation-add">
         <div>
-          <h3>Añadir estudiante</h3>
+          <h3>{linkingPlaceholderId ? "Vincular persona a una cuenta" : "Añadir estudiante"}</h3>
           <p>
-            Busca estudiantes para añadir una reserva o una porción adicional.
-            Cada venta adicional se registra con su propio medio de pago y descuenta del cupo.
+            {linkingPlaceholderId ? "Busca la cuenta recién creada. Las porciones ya están apartadas y no se descontarán otra vez." : "Busca estudiantes para añadir una reserva o una porción adicional. Cada venta adicional se registra con su propio medio de pago y descuenta del cupo."}
           </p>
+          {linkingPlaceholderId && <Button variant="quiet" onClick={() => { setLinkingPlaceholderId(null); setSearch(""); }}>Dejar para más tarde</Button>}
         </div>
-        {canAdd ? (
+        {canAdd || linkingPlaceholderId ? (
           <>
             <div className="km-student-search">
               <label>
@@ -1503,7 +1575,7 @@ function KitchenReservationPanel({
                       <small>{student.email}</small>
                       {student.alreadyAdded && <small className="km-already-added">este estudiante ya se encuentra añadido</small>}
                     </span>
-                    {student.alreadyAdded ? <Button
+                    {linkingPlaceholderId ? <Button variant="secondary" disabled={!!busyOrder || student.alreadyAdded} onClick={() => linkProvisional(student.id)}>Vincular</Button> : student.alreadyAdded ? <Button
                       variant="secondary"
                       disabled={!!busyOrder || !reservations.some((item) => item.studentEmail === student.email && item.status === "reservado" && item.paymentStatus === "approved") || Date.now() < new Date(`${offer.date}T${offer.deliveryTime}:00-05:00`).getTime() || pickupEnded}
                       onClick={() => {
@@ -1554,6 +1626,12 @@ function KitchenReservationPanel({
           </p>
         )}
       </div>
+      {canAdd && !linkingPlaceholderId && <form className="km-placeholder-form" onSubmit={addProvisional}>
+        <div><h3>Persona sin cuenta</h3><p>Aparta porciones ahora y vincula su cuenta cuando se registre.</p></div>
+        <label>Nombre de referencia<input value={placeholderName} maxLength={80} required minLength={2} onChange={(event) => setPlaceholderName(event.target.value)} placeholder="Nombre de la persona" /></label>
+        <KitchenSelect id={`placeholder-quantity-${offer.id}`} label="Porciones" value={placeholderQuantity} options={Array.from({ length: Math.min(10, offer.capacity - offer.reservedCount) }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }))} onChange={setPlaceholderQuantity} />
+        <Button type="submit" disabled={!!busyOrder || placeholderName.trim().length < 2}>{busyOrder ? "Apartando…" : "Apartar porciones"}</Button>
+      </form>}
       <dialog ref={extraDialogRef} className="km-payment-dialog" aria-labelledby="km-extra-title" onClose={() => setExtraItem(null)}>
         <span className="eyebrow">VENTA EN EL RECOJO</span>
         <h2 id="km-extra-title">Porción adicional</h2>
@@ -3240,6 +3318,7 @@ export default function KitchenDashboard({
                       {reservationsOfferId === item.id && <KitchenReservationPanel
                         offer={item}
                         reservations={data.reservations.filter((reservation) => reservation.offerId === item.id)}
+                        placeholders={data.placeholders.filter((person) => person.offerId === item.id)}
                         onChanged={refresh}
                         onClose={() => setReservationsOfferId(null)}
                       />}
@@ -3281,6 +3360,7 @@ type AdminData = {
   weekStart: string;
   offers: AdminOffer[];
   reservations: KitchenReservation[];
+  placeholders: PlaceholderReservation[];
   kitchens: { id: string; name: string }[];
   totalOffers: number;
   limit: number;
@@ -3333,12 +3413,14 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
 function AdminOfferRow({
   offer,
   reservations,
+  placeholders,
   expanded,
   onToggle,
   onChanged,
 }: {
   offer: AdminOffer;
   reservations: KitchenReservation[];
+  placeholders: PlaceholderReservation[];
   expanded: boolean;
   onToggle: () => void;
   onChanged: () => Promise<void>;
@@ -3434,6 +3516,7 @@ function AdminOfferRow({
         <KitchenReservationPanel
           offer={offer}
           reservations={reservations}
+          placeholders={placeholders}
           onChanged={onChanged}
           onClose={onToggle}
           apiPrefix="/api/admin"
@@ -3609,6 +3692,7 @@ export function AdminDashboard({
                 reservations={data.reservations.filter(
                   (item) => item.offerId === offer.id,
                 )}
+                placeholders={data.placeholders.filter((person) => person.offerId === offer.id)}
                 expanded={expanded === offer.id}
                 onToggle={() =>
                   setExpanded((current) =>

@@ -1193,6 +1193,75 @@
   display: grid;
   gap: 14px;
 }
+.km-placeholder-list,
+.km-placeholder-form {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-orange-soft);
+}
+.km-placeholder-list h3,
+.km-placeholder-form h3 {
+  margin: 0;
+  color: var(--color-brand);
+  font: 500 22px/1.2 var(--font-display);
+}
+.km-placeholder-form p {
+  margin: 3px 0 0;
+  color: var(--color-muted);
+  font-size: 14px;
+}
+.km-placeholder-form label {
+  display: grid;
+  gap: 6px;
+  font-weight: 500;
+}
+.km-placeholder-form input {
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-field);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+.km-placeholder-form .button {
+  justify-self: start;
+}
+.km-placeholder-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+}
+.km-placeholder-card strong,
+.km-placeholder-card small {
+  display: block;
+}
+.km-placeholder-card small {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.km-placeholder-actions,
+.km-placeholder-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.km-placeholder-confirm span {
+  color: var(--color-error);
+  font-size: 13px;
+  font-weight: 600;
+}
 .km-reservation-add h3 {
   margin: 0 0 4px;
   font: 500 23px/1.2 var(--font-display);

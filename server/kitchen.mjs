@@ -1,6 +1,7 @@
 ﻿import { randomUUID } from "node:crypto";
 import { getDb, transaction } from "./db.mjs";
 import { weekStart } from "./catalog.mjs";
+import { activePlaceholders } from "./placeholders.mjs";
 
 const fail = (message, status = 400) => {
   throw Object.assign(new Error(message), { status });
@@ -266,6 +267,7 @@ export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
   ]);
 
   if (!profile.rows[0]) fail("Cocina no encontrada.", 404);
+  const placeholders = await activePlaceholders(offers.rows.map((offer) => offer.id));
   const [dishOptions, offerOptions] = await Promise.all([
     loadOptions(db, "dish", kitchenId),
     loadOptions(db, "offer", kitchenId),
@@ -285,6 +287,7 @@ export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
       customization: offerOptions.get(row.id) || [],
     })),
     reservations: reservations.rows,
+    placeholders,
     analytics: includeAnalytics
       ? {
           offers: stats.rows,

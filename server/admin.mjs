@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { weekStart } from "./catalog.mjs";
 import { getDb, transaction } from "./db.mjs";
+import { activePlaceholders } from "./placeholders.mjs";
 
 const fail = (message, status = 400) => {
   throw Object.assign(new Error(message), { status });
@@ -72,6 +73,7 @@ export async function adminData({
   return {
     offers: offers.rows,
     reservations: reservations.rows,
+    placeholders: await activePlaceholders(offerIds),
     weekStart: start,
     kitchens: kitchens.rows,
     totalOffers: Number(count.rows[0].total),

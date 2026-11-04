@@ -48,6 +48,7 @@ import { dispatchPickupReminders, pushConfig, removePushSubscription, savePushSu
 import { expireUnpaidCheckouts, paymentProof, pendingPayments, reviewPayment, submitPaymentProof } from "./payments.mjs";
 import { adminReviews, markReviewPromptSeen, moderateReview, pendingReviewPrompt, recentKitchenReviews } from "./reviews.mjs";
 import { clearExpiredFridgePhotos, fridgeNotices, fridgePhoto, leaveOrderInFridge } from "./fridge.mjs";
+import { addPlaceholder, linkPlaceholder, placeholderKitchen, removePlaceholder } from "./placeholders.mjs";
 
 const googleClientId =
   process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
@@ -564,6 +565,18 @@ async function handleApi(req, res, url) {
         await addKitchenReservation(kitchenId, user.id, data),
       );
     }
+    if (url.pathname === "/api/admin/placeholders/add") {
+      const kitchenId = await adminOfferKitchen(data?.offerId);
+      return json(res, 201, await addPlaceholder(kitchenId, user.id, data));
+    }
+    if (url.pathname === "/api/admin/placeholders/link") {
+      const kitchenId = await placeholderKitchen(data?.placeholderId);
+      return json(res, 200, await linkPlaceholder(kitchenId, user.id, data));
+    }
+    if (url.pathname === "/api/admin/placeholders/remove") {
+      const kitchenId = await placeholderKitchen(data?.placeholderId);
+      return json(res, 200, await removePlaceholder(kitchenId, user.id, data));
+    }
     if (url.pathname === "/api/admin/reservations/extra") {
       const kitchenId = await adminOrderKitchen(data?.orderId);
       return json(res, 201, await addExtraPortion(kitchenId, user.id, data));
@@ -681,6 +694,12 @@ async function handleApi(req, res, url) {
         201,
         await addKitchenReservation(user.kitchenId, user.id, data),
       );
+    if (url.pathname === "/api/kitchen/placeholders/add")
+      return json(res, 201, await addPlaceholder(user.kitchenId, user.id, data));
+    if (url.pathname === "/api/kitchen/placeholders/link")
+      return json(res, 200, await linkPlaceholder(user.kitchenId, user.id, data));
+    if (url.pathname === "/api/kitchen/placeholders/remove")
+      return json(res, 200, await removePlaceholder(user.kitchenId, user.id, data));
     if (url.pathname === "/api/kitchen/reservations/extra")
       return json(res, 201, await addExtraPortion(user.kitchenId, user.id, data));
 
