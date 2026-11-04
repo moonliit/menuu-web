@@ -697,11 +697,11 @@ async function handleApi(req, res, url) {
     } else {
       for await (const chunk of req) {
         size += chunk.length;
-        if (size > 5_000_000) return error(res, 413, "La imagen supera 5 MB.");
+        if (size > 3_000_000) return error(res, 413, "La imagen supera 3 MB.");
         chunks.push(chunk);
       }
     }
-    if (size > 5_000_000) return error(res, 413, "La imagen supera 5 MB.");
+    if (size > 3_000_000) return error(res, 413, "La imagen supera 3 MB.");
     return json(res, 200, await submitPaymentProof(user.id, proofMatch[1], Buffer.concat(chunks)));
   }
 
