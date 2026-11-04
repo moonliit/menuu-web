@@ -3356,13 +3356,15 @@ function KitchenCommentsDialog({ kitchen, onClose }: { kitchen: Kitchen; onClose
       .finally(() => setLoading(false));
   }, [kitchen.id]);
   return createPortal(<dialog ref={ref} className="kitchen-comments-dialog" aria-labelledby="kitchen-comments-title" onClose={onClose}>
-    <button type="button" className="icon-button review-prompt-close" onClick={() => ref.current?.close()} aria-label="Cerrar comentarios"><X size={20} /></button>
-    <span className="eyebrow">OPINIONES DE ESTUDIANTES</span>
-    <h2 id="kitchen-comments-title">Comentarios de {kitchen.name}</h2>
-    {loading ? <p role="status">Cargando comentarios…</p> : error ? <p className="form-error" role="alert">{error}</p> : reviews.length ? <div className="kitchen-comments-list">{reviews.map((review) => <article key={review.orderId} className="kitchen-comment-card">
-      <p>{review.comment}</p>
-      <div className="kitchen-comment-items">{review.items.map((item) => <div key={item.id}><img src={item.imageUrl} alt="" loading="lazy" /><span>{item.quantity} × {item.name}{item.rating && <strong>★ {item.rating}/5</strong>}</span></div>)}</div>
-    </article>)}</div> : <p>Aún no hay comentarios para esta cocina.</p>}
+    <div className="kitchen-comments-scroll dialog-scroll">
+      <button type="button" className="icon-button review-prompt-close" onClick={() => ref.current?.close()} aria-label="Cerrar comentarios"><X size={20} /></button>
+      <span className="eyebrow">OPINIONES DE ESTUDIANTES</span>
+      <h2 id="kitchen-comments-title">Comentarios de {kitchen.name}</h2>
+      {loading ? <p role="status">Cargando comentarios…</p> : error ? <p className="form-error" role="alert">{error}</p> : reviews.length ? <div className="kitchen-comments-list">{reviews.map((review) => <article key={review.orderId} className="kitchen-comment-card">
+        <p>{review.comment}</p>
+        <div className="kitchen-comment-items">{review.items.map((item) => <div key={item.id}><img src={item.imageUrl} alt="" loading="lazy" /><span>{item.quantity} × {item.name}{item.rating && <strong>★ {item.rating}/5</strong>}</span></div>)}</div>
+      </article>)}</div> : <p>Aún no hay comentarios para esta cocina.</p>}
+    </div>
   </dialog>, document.body);
 }
 

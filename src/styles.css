@@ -3302,11 +3302,13 @@ p {
   scrollbar-color: var(--color-scroll-thumb) var(--color-scroll-track);
   scrollbar-width: thin;
 }
-.review-prompt-dialog {
+.review-prompt-dialog,
+.kitchen-comments-dialog {
   padding: 0;
   overflow: hidden;
 }
-.review-prompt-scroll {
+.review-prompt-scroll,
+.kitchen-comments-scroll {
   max-height: min(calc(85dvh - 2px), 738px);
   padding: 30px;
   border-radius: 21px;
@@ -3320,8 +3322,8 @@ p {
   margin: 8px 40px 9px 0;
   font: 500 32px/1.15 var(--font-display);
 }
-.review-prompt-dialog > p,
-.kitchen-comments-dialog > p {
+.review-prompt-scroll > p,
+.kitchen-comments-scroll > p {
   color: var(--color-muted);
 }
 .review-prompt-close {
@@ -3465,10 +3467,8 @@ p {
   .kitchen-comments-link {
     justify-self: start;
   }
-  .kitchen-comments-dialog {
-    padding: 22px;
-  }
-  .review-prompt-scroll {
+  .review-prompt-scroll,
+  .kitchen-comments-scroll {
     padding: 22px;
   }
 }
