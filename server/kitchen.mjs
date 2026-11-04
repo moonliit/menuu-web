@@ -398,8 +398,8 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
     const createdAt = new Date().toISOString();
 
     await db.query(
-      `INSERT INTO orders(id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,fulfillment_status,created_at,delivered_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reservado','QR al recibir',$10,$11,$12,$13)`,
+      `INSERT INTO orders(id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,fulfillment_status,created_at,delivered_at,review_enabled)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reservado','QR al recibir',$10,$11,$12,$13,$14)`,
       [
         orderId,
         `MU-${randomUUID().slice(0, 8).toUpperCase()}`,
@@ -414,6 +414,7 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
         extraordinary ? "delivered" : "pending",
         createdAt,
         extraordinary ? createdAt : null,
+        extraordinary,
       ],
     );
     const addedItem = await db.query(
@@ -646,7 +647,8 @@ export async function updateKitchenReservation(
          payment_recorded=CASE WHEN payment_checkout_id IS NOT NULL THEN 'QR' WHEN $3='delivered' THEN $4 ELSE NULL END,
          delivered_at=$5,
          created_at=CASE WHEN $6=1 THEN $5 ELSE created_at END,
-         review_enabled=CASE WHEN $3='delivered' THEN review_enabled ELSE 0 END
+         review_enabled=CASE WHEN $3='delivered' THEN 1 ELSE 0 END,
+         review_prompt_seen_at=CASE WHEN $3='delivered' THEN review_prompt_seen_at ELSE NULL END
          WHERE id=$1 AND kitchen_id=$2`,
         [
           orderId,
@@ -707,8 +709,8 @@ export async function addExtraPortion(kitchenId, actorId, data, now = new Date()
     const orderId = randomUUID();
     const total = source.unitPriceCents * quantity;
     await db.query(
-      `INSERT INTO orders(id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,fulfillment_status,payment_recorded,created_at,delivered_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reservado',$10,$11,'delivered',$12,$13,$13)`,
+      `INSERT INTO orders(id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,fulfillment_status,payment_recorded,created_at,delivered_at,review_enabled)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reservado',$10,$11,'delivered',$12,$13,$13,1)`,
       [orderId, `MU-${randomUUID().slice(0,8).toUpperCase()}`, source.userId, kitchenId, source.kitchenName,
        source.date, source.deliveryTime, source.pickupUntil, source.pickupPoint, paymentMethod, total, paymentMethod, now.toISOString()],
     );

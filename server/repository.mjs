@@ -144,9 +144,9 @@ export async function getCatalog(now = new Date()) {
     ),
     getDb()
       .query(`SELECT o.kitchen_id AS "kitchenId", round(avg(r.kitchen_rating),1) AS rating,
-      count(*) AS "ratingCount"
+      count(DISTINCT o.user_id) AS "ratingCount"
       FROM order_reviews r JOIN orders o ON o.id=r.order_id
-      WHERE o.status='reservado' AND o.fulfillment_status='delivered' GROUP BY o.kitchen_id`),
+      WHERE o.status='reservado' AND o.fulfillment_status='delivered' AND r.banned_at IS NULL GROUP BY o.kitchen_id`),
   ]);
   const kitchenNames = new Map(
     kitchensResult.rows.map((kitchen) => [kitchen.id, kitchen.name]),
@@ -338,7 +338,7 @@ export async function getOrders(userId, page = null) {
     o.offer_date AS date,o.delivery_time AS "deliveryTime",
     o.pickup_until AS "pickupUntil",o.pickup_point AS "pickupPoint",o.status,COALESCE(o.payment_recorded,o.payment) AS payment,
     o.payment_checkout_id AS "paymentCheckoutId",p.status AS "paymentStatus",p.expires_at AS "paymentExpiresAt",p.review_note AS "paymentReviewNote",p.amount_cents AS "paymentAmountCents",
-    o.fulfillment_status AS "fulfillmentStatus",o.review_enabled AS "reviewEnabled",r.kitchen_rating AS "kitchenRating",
+    o.fulfillment_status AS "fulfillmentStatus",o.review_enabled AS "reviewEnabled",r.kitchen_rating AS "kitchenRating",r.comment AS "kitchenComment",
     o.total_cents AS "totalCents",o.created_at AS "createdAt" FROM orders o
     LEFT JOIN order_reviews r ON r.order_id=o.id
     LEFT JOIN payment_checkouts p ON p.id=o.payment_checkout_id
@@ -412,6 +412,7 @@ export async function getOrders(userId, page = null) {
     fulfillmentStatus: row.fulfillmentStatus,
     reviewEnabled: row.reviewEnabled,
     kitchenRating: row.kitchenRating,
+    kitchenComment: row.kitchenComment,
     totalSoles: soles(row.totalCents),
     createdAt: row.createdAt,
     items: items.get(row.id) || [],
@@ -429,9 +430,11 @@ export async function getOrdersPage(userId, { limit = 10, offset = 0 } = {}) {
   return { orders, total: Number(count.rows[0].total), limit, offset };
 }
 
-export async function submitReview(userId, orderId, payload, now = new Date()) {
+export async function submitReview(userId, orderId, payload) {
   const kitchenRating = Number(payload?.kitchenRating);
-  const foodRatings = payload?.foodRatings;
+  const comment = typeof payload?.comment === "string"
+    ? payload.comment.trim().replace(/\s+/g, " ")
+    : "";
 
   if (
     !Number.isInteger(kitchenRating) ||
@@ -440,24 +443,12 @@ export async function submitReview(userId, orderId, payload, now = new Date()) {
   )
     throw invalid("Califica la cocina de 1 a 5 estrellas.");
 
-  if (
-    !Array.isArray(foodRatings) ||
-    foodRatings.length < 1 ||
-    foodRatings.some(
-      (value) =>
-        !value ||
-        typeof value.orderItemId !== "string" ||
-        !Number.isInteger(value.rating) ||
-        value.rating < 1 ||
-        value.rating > 5,
-    )
-  )
-    throw invalid("Califica cada plato de 1 a 5 estrellas.");
+  if (!comment || comment.length > 100 || /[\u0000-\u001f\u007f]/.test(comment))
+    throw invalid("Escribe un comentario de hasta 100 caracteres.");
 
   return transaction(async (client) => {
     const orderResult = await client.query(
-      `SELECT id,status,fulfillment_status AS "fulfillmentStatus",review_enabled AS "reviewEnabled",
-      offer_date AS date,delivery_time AS "deliveryTime"
+      `SELECT id,status,fulfillment_status AS "fulfillmentStatus",review_enabled AS "reviewEnabled"
       FROM orders WHERE id=$1 AND user_id=$2`,
       [orderId, userId],
     );
@@ -468,8 +459,7 @@ export async function submitReview(userId, orderId, payload, now = new Date()) {
     if (
       order.status !== "reservado" ||
       order.fulfillmentStatus !== "delivered" ||
-      !order.reviewEnabled ||
-      deliveryMoment(order.date, order.deliveryTime) > now
+      !order.reviewEnabled
     )
       throw invalid("Este pedido aún no está habilitado para reseñas.", 403);
 
@@ -481,27 +471,10 @@ export async function submitReview(userId, orderId, payload, now = new Date()) {
       ).rowCount
     )
       throw invalid("Ya calificaste este pedido.", 409);
-    const itemsResult = await client.query(
-      "SELECT CAST(id AS TEXT) AS id FROM order_items WHERE order_id=$1 ORDER BY id",
-      [orderId],
-    );
-    const actual = itemsResult.rows.map((row) => row.id).sort();
-    const submitted = foodRatings.map((row) => row.orderItemId).sort();
-
-    if (
-      actual.length !== submitted.length ||
-      actual.some((id, index) => id !== submitted[index])
-    )
-      throw invalid("Califica todos los platos del pedido una sola vez.");
     await client.query(
-      "INSERT INTO order_reviews (order_id,kitchen_rating) VALUES ($1,$2)",
-      [orderId, kitchenRating],
+      "INSERT INTO order_reviews (order_id,kitchen_rating,comment) VALUES ($1,$2,$3)",
+      [orderId, kitchenRating, comment],
     );
-    for (const value of foodRatings)
-      await client.query(
-        "INSERT INTO order_item_reviews (order_item_id,order_id,food_rating) VALUES ($1,$2,$3)",
-        [value.orderItemId, orderId, value.rating],
-      );
 
     return { ok: true };
   });

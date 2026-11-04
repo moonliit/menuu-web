@@ -103,6 +103,7 @@ export type Order = {
   fulfillmentStatus: "pending" | "delivered" | "no_show";
   reviewEnabled: boolean;
   kitchenRating: number | null;
+  kitchenComment: string | null;
   payment: string;
   paymentCheckoutId: string | null;
   paymentStatus: "awaiting_proof" | "under_review" | "approved" | "rejected" | "expired" | null;

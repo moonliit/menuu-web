@@ -45,6 +45,7 @@ import {
 import { migrate } from "../scripts/migrate.mjs";
 import { dispatchPickupReminders, pushConfig, removePushSubscription, savePushSubscription, validDispatchSecret } from "./push.mjs";
 import { expireUnpaidCheckouts, paymentProof, pendingPayments, reviewPayment, submitPaymentProof } from "./payments.mjs";
+import { adminReviews, markReviewPromptSeen, moderateReview, pendingReviewPrompt, recentKitchenReviews } from "./reviews.mjs";
 
 const googleClientId =
   process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
@@ -449,6 +450,12 @@ async function handleApi(req, res, url) {
       return error(res, 403, "Acceso de admin requerido.");
     if (req.method === "GET" && url.pathname === "/api/admin/payments")
       return json(res, 200, { payments: await pendingPayments() });
+    if (req.method === "GET" && url.pathname === "/api/admin/reviews")
+      return json(res, 200, await adminReviews({
+        kitchen: url.searchParams.get("kitchen") || "all",
+        status: url.searchParams.get("status") || "all",
+        ...listPage(url),
+      }));
     if (req.method === "GET" && url.pathname === "/api/admin/data") {
       const weekValue = url.searchParams.get("week");
       const week = weekValue === null ? null : Number(weekValue);
@@ -491,6 +498,9 @@ async function handleApi(req, res, url) {
     )
       return error(res, 403, "Solicitud no permitida.");
     const data = await body(req);
+    const moderationMatch = /^\/api\/admin\/reviews\/([a-zA-Z0-9-]+)\/moderate$/.exec(url.pathname);
+    if (moderationMatch)
+      return json(res, 200, await moderateReview(moderationMatch[1], user.id, data?.action));
     const reviewMatch = /^\/api\/admin\/payments\/([a-f0-9-]{36})\/review$/.exec(url.pathname);
     if (reviewMatch)
       return json(res, 200, await reviewPayment(reviewMatch[1], user.id, data?.decision, data?.note));
@@ -643,6 +653,16 @@ async function handleApi(req, res, url) {
         ? "no-store"
         : "public, max-age=15, s-maxage=30, stale-while-revalidate=30",
     );
+
+  const kitchenReviewsMatch = /^\/api\/kitchens\/([a-zA-Z0-9-]+)\/reviews$/.exec(url.pathname);
+  if (req.method === "GET" && kitchenReviewsMatch)
+    return json(res, 200, await recentKitchenReviews(kitchenReviewsMatch[1]));
+
+  if (req.method === "GET" && url.pathname === "/api/reviews/pending") {
+    const user = await userFromSession(sessionToken(req));
+    if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+    return json(res, 200, { review: await pendingReviewPrompt(user.id) });
+  }
 
   if (req.method === "GET" && url.pathname === "/api/orders") {
     const user = await userFromSession(sessionToken(req));
@@ -1014,6 +1034,14 @@ async function handleApi(req, res, url) {
       return error(res, 401, "Inicia sesión con tu cuenta de estudiante.");
 
     return json(res, 201, await submitReview(user.id, reviewMatch[1], data));
+  }
+
+  const promptSeenMatch = /^\/api\/orders\/([a-zA-Z0-9-]+)\/review-prompt-seen$/.exec(url.pathname);
+  if (promptSeenMatch) {
+    const user = await userFromSession(sessionToken(req));
+    if (!user || user.role !== "consumer")
+      return error(res, 401, "Inicia sesión con tu cuenta de estudiante.");
+    return json(res, 200, await markReviewPromptSeen(user.id, promptSeenMatch[1]));
   }
 
   return error(res, 404, "Ruta no encontrada.");

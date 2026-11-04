@@ -67,6 +67,7 @@ import {
 } from "./data/catalog";
 import KitchenDashboard, {
   AdminDashboard,
+  AdminReviewsDashboard,
   type KitchenSection,
 } from "./KitchenDashboard";
 import { CustomizationDialog } from "./components/CustomizationDialog";
@@ -94,7 +95,8 @@ type Page =
   | "cocinaEstadisticas"
   | "cocinaCuenta"
   | "admin"
-  | "adminPedidos";
+  | "adminPedidos"
+  | "adminComentarios";
 type PickupOption = { key: string; start: string; end: string };
 const validStudentCode = (code: string) =>
   /^(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})$/.test(code);
@@ -114,6 +116,7 @@ const routes: Record<Page, string> = {
   cocinaCuenta: "#cocina/cuenta",
   admin: "#admin",
   adminPedidos: "#admin/pedidos",
+  adminComentarios: "#admin/comentarios",
 };
 const kitchenPages: Page[] = [
   "cocinaInicio",
@@ -223,6 +226,8 @@ function DataNoticeDialog({
           <p>
             Las cantidades reservadas y las reseñas permiten mostrar
             estadísticas a las cocinas y evaluar el funcionamiento del proyecto.
+            Tu comentario, estrellas y platos pedidos pueden verse en la página
+            de la cocina sin mostrar tu nombre.
           </p>
         </>
       )}
@@ -1590,6 +1595,8 @@ export default function App() {
   const [booking, setBooking] = useState(false);
   const [bookingError, setBookingError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
+  const [reviewPrompt, setReviewPrompt] = useState<ReviewableOrder | null>(null);
+  const [commentsKitchen, setCommentsKitchen] = useState<Kitchen | null>(null);
 
   async function refresh(force = true) {
     const session = await cachedRequest(
@@ -1610,6 +1617,7 @@ export default function App() {
         "cocinaCuenta",
         "admin",
         "adminPedidos",
+        "adminComentarios",
       ].includes(page) &&
       session.user?.role !== "kitchen" &&
       session.user?.role !== "admin";
@@ -1725,6 +1733,21 @@ export default function App() {
     );
   }, []);
   useEffect(() => {
+    if (state?.user?.role !== "consumer") {
+      setReviewPrompt(null);
+      return;
+    }
+    let cancelled = false;
+    api<{ review: ReviewableOrder | null }>("/api/reviews/pending")
+      .then(({ review }) => {
+        if (!review || cancelled) return;
+        setReviewPrompt(review);
+        api(`/api/orders/${review.orderId}/review-prompt-seen`, {}).catch(() => {});
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [state?.user?.id, state?.user?.role]);
+  useEffect(() => {
     const update = () => {
       if (!document.hidden && ["inicio", "buscar", "carrito"].includes(page))
         refreshCatalog(true, true).catch(() => {});
@@ -1788,7 +1811,7 @@ export default function App() {
       setPage("cocinaCuenta");
       window.scrollTo({ top: 0, behavior: "auto" });
     }
-    if (state?.user?.role === "admin" && page !== "adminPedidos") {
+    if (state?.user?.role === "admin" && !["adminPedidos", "adminComentarios"].includes(page)) {
       window.history.replaceState(null, "", routes.adminPedidos);
       setPage("adminPedidos");
       window.scrollTo({ top: 0, behavior: "auto" });
@@ -2212,7 +2235,7 @@ export default function App() {
   const adminSession = state?.user?.role === "admin";
   const adminArea =
     !kitchenSession &&
-    (page === "admin" || page === "adminPedidos" || adminSession);
+    (page === "admin" || page === "adminPedidos" || page === "adminComentarios" || adminSession);
   const kitchenArea =
     !adminSession &&
     (page === "cocina" || kitchenPages.includes(page) || kitchenSession);
@@ -2264,10 +2287,12 @@ export default function App() {
             <nav className="desktop-nav" aria-label="Navegación de admin">
               <a
                 href={routes[adminSession ? "adminPedidos" : "admin"]}
-                aria-current="page"
+                aria-current={page === "adminPedidos" ? "page" : undefined}
+                onClick={(event) => adminSession && follow(event, "adminPedidos")}
               >
                 {adminSession ? "Pedidos y entregas" : "Acceso admin"}
               </a>
+              {adminSession && <a href={routes.adminComentarios} aria-current={page === "adminComentarios" ? "page" : undefined} onClick={(event) => follow(event, "adminComentarios")}>Comentarios</a>}
             </nav>
           ) : kitchenArea ? (
             <nav
@@ -2370,7 +2395,9 @@ export default function App() {
         {state &&
           adminArea &&
           (adminSession ? (
-            <AdminDashboard user={state.user!} onLogout={adminLogout} />
+            page === "adminComentarios"
+              ? <AdminReviewsDashboard user={state.user!} onLogout={adminLogout} />
+              : <AdminDashboard user={state.user!} onLogout={adminLogout} />
           ) : (
             <KitchenAccess
               role="admin"
@@ -2520,14 +2547,17 @@ export default function App() {
           !adminSession &&
           page === "buscar" && (
             <section className="page-section">
-              <div className="page-heading">
-                <span className="eyebrow">ELIGE TU ANTOJO</span>
-                <h1>{activeKitchen ? activeKitchen.name : "Menú semanal"}</h1>
-                <p>
-                  {activeKitchen
-                    ? activeKitchen.description
-                    : "Revisa los días y la hora de recojo de cada cocina."}
-                </p>
+              <div className={`page-heading${activeKitchen ? " kitchen-menu-heading" : ""}`}>
+                <div>
+                  <span className="eyebrow">ELIGE TU ANTOJO</span>
+                  <h1>{activeKitchen ? activeKitchen.name : "Menú semanal"}</h1>
+                  <p>{activeKitchen ? activeKitchen.description : "Revisa los días y la hora de recojo de cada cocina."}</p>
+                </div>
+                {activeKitchen && <div className="kitchen-menu-reputation">
+                  <div className="kitchen-menu-rating"><Star size={21} fill={activeKitchen.rating === null ? "none" : "currentColor"} aria-hidden="true" /><strong>{activeKitchen.rating === null ? "Aún sin puntuación" : `${activeKitchen.rating.toFixed(1)} / 5`}</strong></div>
+                  <span>{activeKitchen.ratingCount} {activeKitchen.ratingCount === 1 ? "persona calificó" : "personas calificaron"}</span>
+                  <Button type="button" variant="secondary" onClick={() => setCommentsKitchen(activeKitchen)}>Ver últimos comentarios</Button>
+                </div>}
               </div>
               {kitchenFilter && !activeKitchen ? (
                 <EmptyState
@@ -2864,7 +2894,22 @@ export default function App() {
           ))}
         </nav>
       )}
-      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice)} />
+      {adminSession && (
+        <nav className="mobile-nav admin-mobile-nav" aria-label="Navegación de admin">
+          <a href={routes.adminPedidos} aria-current={page === "adminPedidos" ? "page" : undefined} onClick={(event) => follow(event, "adminPedidos")}><span className="mobile-icon"><BrandOrdersIcon size={22} /></span><span>Pedidos</span></a>
+          <a href={routes.adminComentarios} aria-current={page === "adminComentarios" ? "page" : undefined} onClick={(event) => follow(event, "adminComentarios")}><span className="mobile-icon"><Star size={22} /></span><span>Comentarios</span></a>
+        </nav>
+      )}
+      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice || reviewPrompt || commentsKitchen)} />
+      {reviewPrompt && <ReviewPromptDialog review={reviewPrompt} onClose={() => setReviewPrompt(null)} onSaved={async () => {
+        setReviewPrompt(null);
+        invalidateCache("orders:");
+        try {
+          await refreshCatalog(true, true);
+          if (page === "pedidos") await loadOrders(ordersPage, true);
+        } catch { /* La reseña ya quedó guardada. */ }
+      }} />}
+      {commentsKitchen && <KitchenCommentsDialog kitchen={commentsKitchen} onClose={() => setCommentsKitchen(null)} />}
       {selected && (
         <CustomizationDialog
           key={selected.id}
@@ -3206,6 +3251,99 @@ function RatingInput({
   );
 }
 
+type ReviewableOrder = {
+  orderId: string;
+  kitchenName: string;
+  code: string;
+  items: { name: string; imageUrl: string; quantity: number }[];
+};
+
+function KitchenReviewForm({ review, onSaved }: {
+  review: ReviewableOrder;
+  onSaved: () => Promise<void>;
+}) {
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await api(`/api/orders/${review.orderId}/review`, { kitchenRating: rating, comment });
+      await onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No pudimos guardar tu reseña.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <form className="review-form" onSubmit={submit}>
+    <h3>¿Qué tal estuvo la sazón?</h3>
+    <p>Califica a {review.kitchenName} por tu pedido {review.code}.</p>
+    <div className="review-ordered-items">
+      {review.items.map((item, index) => <span key={`${item.name}-${index}`}>{item.quantity} × {item.name}</span>)}
+    </div>
+    <RatingInput label={`Cocina ${review.kitchenName}`} value={rating} onChange={setRating} disabled={saving} />
+    <label className="review-comment-field">Tu comentario
+      <textarea value={comment} maxLength={100} rows={3} required disabled={saving} onChange={(event) => setComment(event.target.value)} placeholder="Cuéntanos qué te gustó de su sazón" />
+      <small>{comment.length}/100 caracteres</small>
+    </label>
+    <p className="review-public-note">Tu comentario y los platos de este pedido aparecerán sin tu nombre en la página de la cocina.</p>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <Button type="submit" disabled={saving || rating === 0 || !comment.trim()}>{saving ? "Guardando…" : "Enviar reseña"} <ArrowRight size={18} /></Button>
+  </form>;
+}
+
+function ReviewPromptDialog({ review, onClose, onSaved }: {
+  review: ReviewableOrder;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (!ref.current?.open) ref.current?.showModal(); }, []);
+  return createPortal(<dialog ref={ref} className="review-prompt-dialog" aria-labelledby="review-prompt-title" onClose={onClose}>
+    <button type="button" className="icon-button review-prompt-close" onClick={() => ref.current?.close()} aria-label="Cerrar reseña"><X size={20} /></button>
+    <span className="eyebrow">TU PEDIDO FUE ENTREGADO</span>
+    <h2 id="review-prompt-title">¿Cómo estuvo tu break?</h2>
+    <p>Tu opinión ayuda a otros estudiantes a elegir su próxima comida.</p>
+    <KitchenReviewForm review={review} onSaved={onSaved} />
+  </dialog>, document.body);
+}
+
+type PublicKitchenReview = Pick<ReviewableOrder, "orderId" | "items"> & {
+  rating: number;
+  comment: string;
+  createdAt: string;
+};
+
+function KitchenCommentsDialog({ kitchen, onClose }: { kitchen: Kitchen; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [reviews, setReviews] = useState<PublicKitchenReview[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!ref.current?.open) ref.current?.showModal();
+    api<{ reviews: PublicKitchenReview[] }>(`/api/kitchens/${kitchen.id}/reviews`)
+      .then((result) => setReviews(result.reviews))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "No pudimos cargar los comentarios."))
+      .finally(() => setLoading(false));
+  }, [kitchen.id]);
+  return createPortal(<dialog ref={ref} className="kitchen-comments-dialog" aria-labelledby="kitchen-comments-title" onClose={onClose}>
+    <button type="button" className="icon-button review-prompt-close" onClick={() => ref.current?.close()} aria-label="Cerrar comentarios"><X size={20} /></button>
+    <span className="eyebrow">OPINIONES DE ESTUDIANTES</span>
+    <h2 id="kitchen-comments-title">Comentarios de {kitchen.name}</h2>
+    {loading ? <p role="status">Cargando comentarios…</p> : error ? <p className="form-error" role="alert">{error}</p> : reviews.length ? <div className="kitchen-comments-list">{reviews.map((review) => <article key={review.orderId} className="kitchen-comment-card">
+      <div className="kitchen-comment-stars" aria-label={`${review.rating} de 5 estrellas`}>{[1,2,3,4,5].map((star) => <Star key={star} size={16} fill={star <= review.rating ? "currentColor" : "none"} />)}</div>
+      <p>{review.comment}</p>
+      <div className="kitchen-comment-items">{review.items.map((item, index) => <div key={`${review.orderId}-${index}`}><img src={item.imageUrl} alt="" loading="lazy" /><span>{item.quantity} × {item.name}</span></div>)}</div>
+    </article>)}</div> : <p>Aún no hay comentarios para esta cocina.</p>}
+  </dialog>, document.body);
+}
+
 function PaymentInstructions({ order, onUploaded }: { order: Order; onUploaded: () => Promise<void> }) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -3253,9 +3391,6 @@ function OrderCard({
   showPayment: boolean;
   onReviewed: () => Promise<void>;
 }) {
-  const [kitchenRating, setKitchenRating] = useState(0);
-  const [foodRatings, setFoodRatings] = useState<Record<string, number>>({});
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -3264,7 +3399,6 @@ function OrderCard({
   const canReview =
     order.status === "entregado" &&
     order.reviewEnabled &&
-    afterDelivery &&
     order.kitchenRating === null;
   const label =
     order.status === "entregado"
@@ -3297,29 +3431,6 @@ function OrderCard({
       setCancelBusy(false);
     }
   }
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError("");
-    setSaving(true);
-    try {
-      await api(`/api/orders/${order.id}/review`, {
-        kitchenRating,
-        foodRatings: order.items.map((item) => ({
-          orderItemId: item.id,
-          rating: foodRatings[item.id],
-        })),
-      });
-      await onReviewed();
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "No pudimos guardar tu reseña.",
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
   return (
     <article className="order-card">
       <div className="order-head">
@@ -3343,9 +3454,6 @@ function OrderCard({
                 </small>
               )}
               {item.comment && <small>Comentario: {item.comment}</small>}
-              {item.foodRating !== null && (
-                <small>Tu puntuación: {item.foodRating}/5</small>
-              )}
             </span>
             <strong>{money(item.totalSoles)}</strong>
           </div>
@@ -3409,10 +3517,11 @@ function OrderCard({
         </div>
       )}
       {order.kitchenRating !== null && (
-        <p className="review-saved">
+        <div className="review-saved">
           <Star size={17} fill="currentColor" aria-hidden="true" /> Calificaste
           a {order.kitchenName} con {order.kitchenRating}/5.
-        </p>
+          {order.kitchenComment && <span>“{order.kitchenComment}”</span>}
+        </div>
       )}
       {order.status === "entrega_pendiente" && (
         <p className="review-note">
@@ -3433,42 +3542,7 @@ function OrderCard({
           </p>
         )}
       {canReview && (
-        <form className="review-form" onSubmit={submit}>
-          <h3>¿Cómo estuvo tu break?</h3>
-          <p>Califica la cocina y cada plato de este pedido.</p>
-          <RatingInput
-            label={`Cocina ${order.kitchenName}`}
-            value={kitchenRating}
-            onChange={setKitchenRating}
-            disabled={saving}
-          />
-          {order.items.map((item) => (
-            <RatingInput
-              key={item.id}
-              label={item.name}
-              value={foodRatings[item.id] || 0}
-              onChange={(value) =>
-                setFoodRatings((current) => ({ ...current, [item.id]: value }))
-              }
-              disabled={saving}
-            />
-          ))}
-          {error && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          )}
-          <Button
-            type="submit"
-            disabled={
-              saving ||
-              kitchenRating === 0 ||
-              order.items.some((item) => !foodRatings[item.id])
-            }
-          >
-            {saving ? "Guardando…" : "Enviar reseña"} <ArrowRight size={18} />
-          </Button>
-        </form>
+        <KitchenReviewForm review={{ orderId: order.id, kitchenName: order.kitchenName, code: order.code, items: order.items }} onSaved={onReviewed} />
       )}
     </article>
   );

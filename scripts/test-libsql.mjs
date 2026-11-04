@@ -105,6 +105,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
   const { handleRequest } = await import("../server/index.mjs");
   const { dispatchPickupReminders, savePushSubscription, validDispatchSecret } = await import("../server/push.mjs");
   const { submitPaymentProof, reviewPayment, pendingPayments, expireUnpaidCheckouts, paymentProof } = await import("../server/payments.mjs");
+  const { adminReviews, markReviewPromptSeen, moderateReview, pendingReviewPrompt, recentKitchenReviews } = await import("../server/reviews.mjs");
 
   try {
     const migrationDb = getDb();
@@ -389,20 +390,37 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       "UPDATE orders SET fulfillment_status=$2,review_enabled=$3 WHERE id=$1",
       [order.id, "delivered", true],
     );
+    assert.equal((await pendingReviewPrompt(consumers[0].id)).orderId, order.id);
+    await markReviewPromptSeen(consumers[0].id, order.id);
+    assert.equal(await pendingReviewPrompt(consumers[0].id), null);
     await submitReview(
       consumers[0].id,
       order.id,
       {
         kitchenRating: 5,
-        foodRatings: [{ orderItemId: String(order.items[0].id), rating: 4 }],
+        comment: "Muy rico el almuerzo.",
       },
-      new Date(`${offerDate}T14:00:00-05:00`),
     );
+    await assert.rejects(submitReview(consumers[0].id, order.id, {
+      kitchenRating: 5, comment: "x".repeat(101),
+    }), /100 caracteres/);
     assert.equal(
       (await getCatalog()).kitchens.find((item) => item.id === "test-kitchen")
         .rating,
       5,
     );
+    const publicReviews = await recentKitchenReviews("test-kitchen");
+    assert.equal(publicReviews.reviews[0].comment, "Muy rico el almuerzo.");
+    assert.equal(publicReviews.reviews[0].items[0].name, order.items[0].name);
+    assert.equal((await adminReviews()).reviews[0].orderId, order.id);
+    await moderateReview(order.id, "payment-reviewer", "ban");
+    assert.equal((await getCatalog()).kitchens.find((item) => item.id === "test-kitchen").rating, null);
+    assert.equal((await recentKitchenReviews("test-kitchen")).reviews.length, 0);
+    assert.equal((await adminReviews({ status: "visible" })).total, 0);
+    assert.equal((await adminReviews({ status: "banned" })).reviews[0].orderId, order.id);
+    await moderateReview(order.id, "payment-reviewer", "restore");
+    assert.equal((await getCatalog()).kitchens.find((item) => item.id === "test-kitchen").rating, 5);
+    assert.deepEqual((await db.query("SELECT action FROM review_moderation_events WHERE order_id=$1 ORDER BY created_at,rowid", [order.id])).rows.map((row) => row.action), ["ban", "restore"]);
     const server = createServer(handleRequest);
 
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -642,6 +660,9 @@ if (!process.env.MENUU_TEST_DB_PATH) {
 
       assert.equal(adminLogin.status, 200);
       assert.equal((await adminLogin.json()).user.role, "admin");
+      assert.equal((await fetch(`${base}/api/kitchens/test-kitchen/reviews`)).status, 200);
+      assert.equal((await fetch(`${base}/api/admin/reviews`)).status, 401);
+      assert.equal((await fetch(`${base}/api/admin/reviews`, { headers: { Cookie: adminCookie } })).status, 200);
       assert.equal((await fetch(`${base}/api/admin/data`)).status, 401);
       assert.equal(
         (await fetch(`${base}/api/admin/data`, { headers: { Cookie: cookie } }))
@@ -843,6 +864,8 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       );
 
       assert.equal(adminDelivered.status, 200);
+      assert.equal((await getOrders(freshUser.id)).find((item) => item.id === adminOrderId).reviewEnabled, true);
+      assert.equal((await pendingReviewPrompt(freshUser.id)).orderId, adminOrderId);
       assert.equal(
         (
           await db.query("SELECT delivered_at FROM orders WHERE id=$1", [

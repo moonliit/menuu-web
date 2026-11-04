@@ -3036,8 +3036,160 @@ p {
 .review-form > p {
   font-size: 14px;
 }
+.review-form .review-public-note {
+  color: var(--color-muted);
+}
 .review-form .button {
   justify-self: start;
+}
+.review-ordered-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: var(--color-muted);
+  font-size: 14px;
+}
+.review-comment-field {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+.review-comment-field textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-field);
+  background: white;
+  color: var(--color-text);
+  font: 400 16px/1.5 var(--font-body);
+}
+.review-comment-field small {
+  justify-self: end;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.review-saved span {
+  font-weight: 400;
+}
+.review-prompt-dialog,
+.kitchen-comments-dialog {
+  width: min(560px, calc(100% - 32px));
+  max-height: min(85dvh, 740px);
+  overflow-y: auto;
+  margin: auto;
+  padding: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: 22px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 0 24px 70px rgb(7 83 56 / 20%);
+  scrollbar-color: var(--color-scroll-thumb) var(--color-scroll-track);
+  scrollbar-width: thin;
+}
+.review-prompt-dialog::backdrop,
+.kitchen-comments-dialog::backdrop {
+  background: rgb(11 35 24 / 56%);
+}
+.review-prompt-dialog h2,
+.kitchen-comments-dialog h2 {
+  margin: 8px 40px 9px 0;
+  font: 500 32px/1.15 var(--font-display);
+}
+.review-prompt-dialog > p,
+.kitchen-comments-dialog > p {
+  color: var(--color-muted);
+}
+.review-prompt-close {
+  float: right;
+}
+.review-prompt-dialog .review-form {
+  margin-top: 18px;
+}
+.kitchen-menu-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+.kitchen-menu-heading > div:first-child {
+  min-width: 0;
+}
+.kitchen-menu-reputation {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  padding-top: 4px;
+  text-align: right;
+}
+.kitchen-menu-rating {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-brand);
+}
+.kitchen-menu-rating strong {
+  font-size: 18px;
+}
+.kitchen-menu-reputation > span {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.kitchen-menu-reputation .button {
+  margin-top: 5px;
+}
+.kitchen-comments-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+.kitchen-comment-card {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: white;
+}
+.kitchen-comment-card p {
+  margin: 9px 0 13px;
+}
+.kitchen-comment-stars {
+  display: flex;
+  gap: 3px;
+  color: var(--color-brand);
+}
+.kitchen-comment-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.kitchen-comment-items > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-muted);
+}
+.kitchen-comment-items img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 9px;
+}
+@media (max-width: 700px) {
+  .kitchen-menu-heading {
+    display: block;
+  }
+  .kitchen-menu-reputation {
+    justify-items: start;
+    margin-top: 18px;
+    text-align: left;
+  }
+  .review-prompt-dialog,
+  .kitchen-comments-dialog {
+    padding: 22px;
+  }
 }
 .rating-field {
   display: flex;
