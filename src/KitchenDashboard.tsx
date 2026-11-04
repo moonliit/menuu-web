@@ -321,7 +321,7 @@ function KitchenSelect({
   label: string;
   value: string;
   placeholder?: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; imageUrl?: string }[];
   onChange: (value: string) => void;
   withinDialog?: boolean;
 }) {
@@ -414,7 +414,7 @@ function KitchenSelect({
       <button
         ref={triggerRef}
         type="button"
-        className="km-select-trigger"
+        className={`km-select-trigger${selected?.imageUrl ? " km-select-trigger-photo" : ""}`}
         role="combobox"
         aria-labelledby={`${id}-label ${id}-value`}
         aria-controls={`${id}-options`}
@@ -428,6 +428,7 @@ function KitchenSelect({
           } else if (event.key === "Escape") setOpen(false);
         }}
       >
+        {selected?.imageUrl && <img className="km-select-photo" src={selected.imageUrl} alt="" />}
         <span id={`${id}-value`} className={selected ? "" : "placeholder"}>
           {selected?.label || placeholder || "Selecciona una opción"}
         </span>
@@ -483,6 +484,7 @@ function KitchenSelect({
                 }
               }}
             >
+              {option.imageUrl && <img className="km-select-photo" src={option.imageUrl} alt="" loading="lazy" />}
               <span>{option.label}</span>
               {value === option.value && <Check size={18} aria-hidden="true" />}
             </button>
@@ -805,6 +807,7 @@ function KitchenMenuRow({
   onEdit,
   onReservations,
   reservationsOpen,
+  selected,
 }: {
   offer: Offer;
   dish?: Dish;
@@ -814,10 +817,11 @@ function KitchenMenuRow({
   onEdit: () => void;
   onReservations: () => void;
   reservationsOpen: boolean;
+  selected: boolean;
 }) {
   const past = offer.date < today;
   return (
-    <article className="km-menu-row">
+    <article className={`km-menu-row${selected ? " km-menu-row-selected" : ""}`}>
       <div className="km-menu-date">
         <strong>
           {dateLabel(offer.date, { weekday: "short", day: "numeric" })}
@@ -855,7 +859,7 @@ function KitchenMenuRow({
         {past ? (
           <span className="km-locked">Día pasado</span>
         ) : (
-          <Button variant="secondary" onClick={onEdit}>
+          <Button variant="secondary" onClick={onEdit} aria-expanded={selected && !reservationsOpen}>
             Editar
           </Button>
         )}
@@ -2398,6 +2402,196 @@ export default function KitchenDashboard({
       </button>
     </div>
   );
+  const renderOfferEditor = (offer: Offer, data: Data) => (
+    <form
+      className="km-editor"
+      onSubmit={(event) => {
+        event.preventDefault();
+        save(
+          "/api/kitchen/offers",
+          {
+            ...offer,
+            bookingDeadline: isoFromLocal(offer.bookingDeadline),
+          },
+          () => setOffer(null),
+        );
+      }}
+    >
+      <div className="km-editor-head">
+        <h2>{offer.id ? "Editar menú" : "Nuevo menú"}</h2>
+        <button
+          type="button"
+          className="km-icon-button"
+          onClick={() => setOffer(null)}
+          aria-label="Cerrar editor"
+        >
+          <X size={20} />
+        </button>
+      </div>
+      <div className="km-form-grid">
+        <KitchenSelect
+          id="offer-dish"
+          label="Plato creado"
+          value={offer.dishId}
+          placeholder="Selecciona un plato"
+          options={data.dishes
+            .filter((item) => item.active || item.id === offer.dishId)
+            .map((item) => ({ value: item.id, label: item.active ? item.name : `${item.name} (archivado)`, imageUrl: item.imageUrl }))}
+          onChange={(dishId) => setOffer({ ...offer, dishId })}
+        />
+        <label>
+          Fecha de recojo
+          <input
+            type="date"
+            required
+            min={current}
+            value={offer.date}
+            onChange={(event) =>
+              setOffer({ ...offer, date: event.target.value })
+            }
+          />
+        </label>
+        <label className="km-offer-time-field">
+          Hora de recojo
+          <input
+            type="time"
+            required
+            value={offer.deliveryTime}
+            onChange={(event) =>
+              setOffer({
+                ...offer,
+                deliveryTime: event.target.value,
+              })
+            }
+          />
+        </label>
+        <label className="km-offer-time-field">
+          Fin de recojo
+          <input
+            type="time"
+            required
+            min={pickupTimeAfter(offer.deliveryTime, 1)}
+            max={pickupTimeAfter(offer.deliveryTime, 60)}
+            value={offer.pickupUntil}
+            onChange={(event) =>
+              setOffer({
+                ...offer,
+                pickupUntil: event.target.value,
+              })
+            }
+          />
+          <small>Máximo 1 hora después del inicio.</small>
+        </label>
+        <label>
+          Cierre de reserva
+          <input
+            type="datetime-local"
+            required
+            value={offer.bookingDeadline}
+            onChange={(event) =>
+              setOffer({
+                ...offer,
+                bookingDeadline: event.target.value,
+              })
+            }
+          />
+        </label>
+        <label>
+          Porciones disponibles en total
+          <input
+            type="number"
+            required
+            min={Math.max(1, offer.reservedCount)}
+            max={10000}
+            value={offer.capacity}
+            onChange={(event) =>
+              setOffer({
+                ...offer,
+                capacity: Number(event.target.value),
+              })
+            }
+          />
+        </label>
+        <label>
+          Precio especial S/ <small>Opcional</small>
+          <input
+            type="number"
+            min={0}
+            max={1000}
+            step="0.01"
+            value={offer.priceSoles ?? ""}
+            placeholder="Usar precio del plato"
+            onChange={(event) =>
+              setOffer({
+                ...offer,
+                priceSoles: event.target.value
+                  ? Number(event.target.value)
+                  : null,
+              })
+            }
+          />
+        </label>
+        <label className="km-wide">
+          Descripción para este día{" "}
+          <small>
+            Opcional · {offer.descriptionOverride?.length || 0}/90
+          </small>
+          <textarea
+            maxLength={90}
+            rows={2}
+            value={offer.descriptionOverride ?? ""}
+            onChange={(event) =>
+              setOffer({
+                ...offer,
+                descriptionOverride: event.target.value || null,
+              })
+            }
+            placeholder="Si hoy el plato tiene un detalle distinto"
+          />
+        </label>
+      </div>
+      <label className="km-check">
+        <input
+          type="checkbox"
+          checked={offer.hasCustomizationOverride}
+          onChange={(event) =>
+            setOffer({
+              ...offer,
+              hasCustomizationOverride: event.target.checked,
+              customization: event.target.checked
+                ? cloneGroups(
+                    data.dishes.find(
+                      (item) => item.id === offer.dishId,
+                    )?.customization || [],
+                  )
+                : [],
+            })
+          }
+        />{" "}
+        Usar opciones especiales para este menú
+      </label>
+      {offer.hasCustomizationOverride && (
+        <OptionEditor
+          groups={offer.customization}
+          onChange={(customization) =>
+            setOffer({ ...offer, customization })
+          }
+        />
+      )}
+      <div className="km-form-actions">
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => setOffer(null)}
+        >
+          Cancelar
+        </Button>
+        <Button type="submit" disabled={busy}>
+          {busy ? "Guardando…" : "Guardar menú"}
+        </Button>
+      </div>
+    </form>
+  );
   return (
     <section className="km-shell">
       <div className="km-heading">
@@ -2820,14 +3014,14 @@ export default function KitchenDashboard({
                   <button
                     type="button"
                     className={week === 0 ? "active" : ""}
-                    onClick={() => setWeek(0)}
+                    onClick={() => { setWeek(0); setOffer(null); setReservationsOfferId(null); }}
                   >
                     Esta semana
                   </button>
                   <button
                     type="button"
                     className={week === 1 ? "active" : ""}
-                    onClick={() => setWeek(1)}
+                    onClick={() => { setWeek(1); setOffer(null); setReservationsOfferId(null); }}
                   >
                     Siguiente semana
                   </button>
@@ -2851,6 +3045,7 @@ export default function KitchenDashboard({
                       blankOffer(data.dishes.find((item) => item.active)?.id),
                     );
                     setDish(null);
+                    setReservationsOfferId(null);
                   }}
                   disabled={!data.dishes.some((item) => item.active)}
                 >
@@ -2862,242 +3057,41 @@ export default function KitchenDashboard({
                   Crea un plato activo antes de publicar un menú.
                 </p>
               )}
-              {offer && (
-                <form
-                  className="km-editor"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    save(
-                      "/api/kitchen/offers",
-                      {
-                        ...offer,
-                        bookingDeadline: isoFromLocal(offer.bookingDeadline),
-                      },
-                      () => setOffer(null),
-                    );
-                  }}
-                >
-                  <div className="km-editor-head">
-                    <h2>{offer.id ? "Editar menú" : "Nuevo menú"}</h2>
-                    <button
-                      type="button"
-                      className="km-icon-button"
-                      onClick={() => setOffer(null)}
-                      aria-label="Cerrar editor"
-                    >
-                      <X size={20} />
-                    </button>
-                  </div>
-                  <div className="km-form-grid">
-                    <KitchenSelect
-                      id="offer-dish"
-                      label="Plato creado"
-                      value={offer.dishId}
-                      placeholder="Selecciona un plato"
-                      options={data.dishes
-                        .filter((item) => item.active)
-                        .map((item) => ({ value: item.id, label: item.name }))}
-                      onChange={(dishId) => setOffer({ ...offer, dishId })}
-                    />
-                    <label>
-                      Fecha de recojo
-                      <input
-                        type="date"
-                        required
-                        min={current}
-                        value={offer.date}
-                        onChange={(event) =>
-                          setOffer({ ...offer, date: event.target.value })
-                        }
-                      />
-                    </label>
-                    <label className="km-offer-time-field">
-                      Hora de recojo
-                      <input
-                        type="time"
-                        required
-                        value={offer.deliveryTime}
-                        onChange={(event) =>
-                          setOffer({
-                            ...offer,
-                            deliveryTime: event.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="km-offer-time-field">
-                      Fin de recojo
-                      <input
-                        type="time"
-                        required
-                        min={pickupTimeAfter(offer.deliveryTime, 1)}
-                        max={pickupTimeAfter(offer.deliveryTime, 60)}
-                        value={offer.pickupUntil}
-                        onChange={(event) =>
-                          setOffer({
-                            ...offer,
-                            pickupUntil: event.target.value,
-                          })
-                        }
-                      />
-                      <small>Máximo 1 hora después del inicio.</small>
-                    </label>
-                    <label>
-                      Cierre de reserva
-                      <input
-                        type="datetime-local"
-                        required
-                        value={offer.bookingDeadline}
-                        onChange={(event) =>
-                          setOffer({
-                            ...offer,
-                            bookingDeadline: event.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Porciones disponibles en total
-                      <input
-                        type="number"
-                        required
-                        min={Math.max(1, offer.reservedCount)}
-                        max={10000}
-                        value={offer.capacity}
-                        onChange={(event) =>
-                          setOffer({
-                            ...offer,
-                            capacity: Number(event.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Precio especial S/ <small>Opcional</small>
-                      <input
-                        type="number"
-                        min={0}
-                        max={1000}
-                        step="0.01"
-                        value={offer.priceSoles ?? ""}
-                        placeholder="Usar precio del plato"
-                        onChange={(event) =>
-                          setOffer({
-                            ...offer,
-                            priceSoles: event.target.value
-                              ? Number(event.target.value)
-                              : null,
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="km-wide">
-                      Descripción para este día{" "}
-                      <small>
-                        Opcional · {offer.descriptionOverride?.length || 0}/90
-                      </small>
-                      <textarea
-                        maxLength={90}
-                        rows={2}
-                        value={offer.descriptionOverride ?? ""}
-                        onChange={(event) =>
-                          setOffer({
-                            ...offer,
-                            descriptionOverride: event.target.value || null,
-                          })
-                        }
-                        placeholder="Si hoy el plato tiene un detalle distinto"
-                      />
-                    </label>
-                  </div>
-                  <label className="km-check">
-                    <input
-                      type="checkbox"
-                      checked={offer.hasCustomizationOverride}
-                      onChange={(event) =>
-                        setOffer({
-                          ...offer,
-                          hasCustomizationOverride: event.target.checked,
-                          customization: event.target.checked
-                            ? cloneGroups(
-                                data.dishes.find(
-                                  (item) => item.id === offer.dishId,
-                                )?.customization || [],
-                              )
-                            : [],
-                        })
-                      }
-                    />{" "}
-                    Usar opciones especiales para este menú
-                  </label>
-                  {offer.hasCustomizationOverride && (
-                    <OptionEditor
-                      groups={offer.customization}
-                      onChange={(customization) =>
-                        setOffer({ ...offer, customization })
-                      }
-                    />
-                  )}
-                  <div className="km-form-actions">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => setOffer(null)}
-                    >
-                      Cancelar
-                    </Button>
-                    <Button type="submit" disabled={busy}>
-                      {busy ? "Guardando…" : "Guardar menú"}
-                    </Button>
-                  </div>
-                </form>
-              )}
+              {offer && !offer.id && renderOfferEditor(offer, data)}
               {visibleOffers.length ? (
                 <div className="km-offer-list">
                   {visibleOffers.map((item) => (
-                    <KitchenMenuRow
-                      key={item.id}
-                      offer={item}
-                      dish={data.dishes.find((d) => d.id === item.dishId)}
-                      onTimeCount={onTimeReservationsForOffer(
-                        data.reservations,
-                        item,
-                      )}
-                      deliveredCount={deliveredUnitsForOffer(
-                        data.reservations,
-                        item.id,
-                      )}
-                      today={current}
-                      reservationsOpen={reservationsOfferId === item.id}
-                      onReservations={() =>
-                        setReservationsOfferId((current) =>
-                          current === item.id ? null : item.id,
-                        )
-                      }
-                      onEdit={() =>
-                        setOffer({
-                          ...item,
-                          customization: cloneGroups(item.customization),
-                          bookingDeadline: localDateTime(item.bookingDeadline),
-                        })
-                      }
-                    />
-                  ))}
-                  {reservationsOfferId &&
-                    data.offers.find(
-                      (item) => item.id === reservationsOfferId,
-                    ) && (
-                      <KitchenReservationPanel
-                        offer={data.offers.find(
-                          (item) => item.id === reservationsOfferId,
-                        )!}
-                        reservations={data.reservations.filter(
-                          (item) => item.offerId === reservationsOfferId,
-                        )}
+                    <div className="km-offer-group" key={item.id}>
+                      <KitchenMenuRow
+                        offer={item}
+                        dish={data.dishes.find((d) => d.id === item.dishId)}
+                        onTimeCount={onTimeReservationsForOffer(data.reservations, item)}
+                        deliveredCount={deliveredUnitsForOffer(data.reservations, item.id)}
+                        today={current}
+                        selected={offer?.id === item.id || reservationsOfferId === item.id}
+                        reservationsOpen={reservationsOfferId === item.id}
+                        onReservations={() => {
+                          setOffer(null);
+                          setReservationsOfferId((current) => current === item.id ? null : item.id);
+                        }}
+                        onEdit={() => {
+                          setReservationsOfferId(null);
+                          setOffer((current) => current?.id === item.id ? null : {
+                            ...item,
+                            customization: cloneGroups(item.customization),
+                            bookingDeadline: localDateTime(item.bookingDeadline),
+                          });
+                        }}
+                      />
+                      {offer?.id === item.id && renderOfferEditor(offer, data)}
+                      {reservationsOfferId === item.id && <KitchenReservationPanel
+                        offer={item}
+                        reservations={data.reservations.filter((reservation) => reservation.offerId === item.id)}
                         onChanged={refresh}
                         onClose={() => setReservationsOfferId(null)}
-                      />
-                    )}
+                      />}
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="km-empty">
@@ -3217,7 +3211,7 @@ function AdminOfferRow({
   }
   return (
     <div className="admin-offer-group">
-      <article className="admin-offer-row">
+      <article className={`admin-offer-row${expanded ? " admin-offer-row-selected" : ""}`}>
         <img
           src={offer.imageUrl || "/images/menuu-logo.png"}
           alt={offer.imageAlt || offer.dishName}
@@ -3566,8 +3560,8 @@ export function AdminReviewsDashboard({ user, onLogout }: { user: User; onLogout
       <Button type="button" variant="secondary" onClick={onLogout}><BrandLogoutIcon size={18} /> Cerrar sesión</Button>
     </div>
     <div className="admin-review-controls">
-      <label>Cocina<select value={kitchen} onChange={(event) => { setKitchen(event.target.value); setPage(0); }}><option value="all">Todas las cocinas</option>{data?.kitchens.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label>Estado<select value={status} onChange={(event) => { setStatus(event.target.value); setPage(0); }}><option value="all">Todas</option><option value="visible">Visibles</option><option value="banned">Baneadas</option></select></label>
+      <KitchenSelect id="admin-review-kitchen" label="Cocina" value={kitchen} options={[{ value: "all", label: "Todas las cocinas" }, ...(data?.kitchens.map((item) => ({ value: item.id, label: item.name })) || [])]} onChange={(value) => { setKitchen(value); setPage(0); }} />
+      <KitchenSelect id="admin-review-status" label="Estado" value={status} options={[{ value: "all", label: "Todas" }, { value: "visible", label: "Visibles" }, { value: "banned", label: "Baneadas" }]} onChange={(value) => { setStatus(value); setPage(0); }} />
     </div>
     {error && <p className="km-alert" role="alert">{error}</p>}
     {!data ? <p className="km-loading" role="status">Cargando comentarios…</p> : <>

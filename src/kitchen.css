@@ -532,6 +532,14 @@
   display: grid;
   gap: 12px;
 }
+.km-offer-group {
+  display: grid;
+  gap: 10px;
+  overflow-anchor: none;
+}
+.km-offer-group > .km-editor {
+  margin: 0;
+}
 .km-dish-row,
 .km-offer-row {
   display: flex;
@@ -933,6 +941,10 @@
   border-radius: 20px;
   background: white;
   box-shadow: var(--shadow-card);
+}
+.km-menu-row-selected {
+  border-color: #e9ad78;
+  background: var(--color-peach);
 }
 .km-menu-date,
 .km-menu-count {
@@ -1404,6 +1416,9 @@
   font-size: 16px;
   font-weight: 400;
 }
+.km-select-trigger-photo {
+  padding-block: 8px;
+}
 .km-select-trigger:hover {
   border-color: var(--color-scroll-thumb);
 }
@@ -1417,6 +1432,14 @@
 }
 .km-select-trigger .placeholder {
   color: #657664;
+}
+.km-select-photo {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  object-fit: cover;
+  background: var(--color-peach);
 }
 .km-select-trigger > svg {
   flex: none;
@@ -1490,6 +1513,10 @@
 .km-select-options button[aria-selected="true"] {
   background: var(--color-orange-soft);
   color: var(--color-brand);
+}
+.km-select-options button > span {
+  flex: 1;
+  min-width: 0;
 }
 @media (max-width: 1050px) {
   .km-menu-row {

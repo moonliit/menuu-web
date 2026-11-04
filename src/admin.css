@@ -18,21 +18,8 @@
   gap: 14px;
   margin-bottom: 18px;
 }
-.admin-review-controls label {
-  display: grid;
-  gap: 5px;
-  min-width: 190px;
-  font-size: 14px;
-  font-weight: 600;
-}
-.admin-review-controls select {
-  min-height: 48px;
-  padding: 9px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  background: white;
-  color: var(--color-text);
-  font: 400 16px var(--font-body);
+.admin-review-controls .km-select {
+  flex: 0 1 260px;
 }
 .admin-review-count {
   margin: 0 0 14px;
@@ -92,7 +79,7 @@
 @media (max-width: 700px) {
   .admin-mobile-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-review-list { grid-template-columns: 1fr; }
-  .admin-review-controls label { flex: 1 1 100%; }
+  .admin-review-controls .km-select { flex: 1 1 100%; }
 }
 .admin-controls {
   display: flex;
@@ -133,6 +120,7 @@
 .admin-offer-group {
   display: grid;
   gap: 10px;
+  overflow-anchor: none;
 }
 .admin-offer-row {
   display: grid;
@@ -146,6 +134,10 @@
   border-radius: var(--radius-card);
   background: var(--color-surface);
   box-shadow: var(--shadow-card);
+}
+.admin-offer-row-selected {
+  border-color: #e9ad78;
+  background: var(--color-peach);
 }
 .admin-offer-row > img {
   width: 76px;
