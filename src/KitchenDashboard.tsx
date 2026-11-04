@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Button } from "./components/ui";
 import { CustomizationDialog } from "./components/CustomizationDialog";
+import { useImageDrop } from "./components/useImageDrop";
 import {
   BrandAddIcon,
   BrandCalendarIcon,
@@ -296,6 +297,8 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
 async function upload(file: File, scope: "profile" | "dish") {
   if (!["image/png", "image/jpeg"].includes(file.type))
     throw new Error("Elige una foto PNG o JPG.");
+  if (file.size > 2_000_000)
+    throw new Error("La foto debe pesar como máximo 2 MB.");
   const csrf = document.cookie.split(";").map((part) => part.trim())
     .find((part) => part.startsWith("menuu_csrf="))?.slice("menuu_csrf=".length);
   const response = await fetch(
@@ -1938,6 +1941,7 @@ function KitchenProfile({
       setPhotoBusy(false);
     }
   }
+  const profileDrop = useImageDrop((file) => { void changePhoto(file); }, photoBusy);
   return (
     <div className="account-panel km-profile">
       <div className="account-intro">
@@ -1960,33 +1964,35 @@ function KitchenProfile({
         </p>
       )}
       <div className="km-profile-layout">
-        <div className="km-profile-photo">
+        <div className={`km-profile-photo${profileDrop.dragging ? " is-dragging" : ""}`} {...profileDrop.dropProps}>
           <img
             src={profile.logoUrl || "/images/menuu-logo.png"}
             alt={`Foto de ${profile.name}`}
           />
-          <button
-            type="button"
-            className="km-outline-button"
-            disabled={photoBusy}
-            onClick={() => photoInputRef.current?.click()}
-          >
-            <BrandCameraIcon size={18} />
-            {photoBusy ? "Subiendo…" : "Cambiar foto"}
-          </button>
-          <input
-            ref={photoInputRef}
-            type="file"
-            accept="image/png,image/jpeg"
-            hidden
-            disabled={photoBusy}
-            onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-              void changePhoto(file);
-            }}
-          />
-          <small>PNG o JPG · máximo 2 MB</small>
+          <div className="km-photo-drop">
+            <button
+              type="button"
+              className="km-outline-button"
+              disabled={photoBusy}
+              onClick={() => photoInputRef.current?.click()}
+            >
+              <BrandCameraIcon size={18} />
+              {photoBusy ? "Subiendo…" : "Cambiar foto"}
+            </button>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/png,image/jpeg"
+              hidden
+              disabled={photoBusy}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                void changePhoto(file);
+              }}
+            />
+            <small>PNG o JPG · máximo 2 MB<span className="km-drop-hint"> · o arrastra aquí</span></small>
+          </div>
         </div>
         {editing ? (
           <form className="account-form km-profile-form" onSubmit={save}>
@@ -2375,6 +2381,7 @@ export default function KitchenDashboard({
       setPhotoBusy(false);
     }
   };
+  const dishDrop = useImageDrop((file) => { void changeDishImage(file); }, photoBusy);
   const current = todayLima();
   const day = new Date(`${current}T12:00:00Z`);
   const monday = new Date(day);
@@ -2849,7 +2856,7 @@ export default function KitchenDashboard({
                           placeholder="Cuenta qué lleva o si incluye postre o bebida"
                         />
                       </label>
-                      <div className="km-wide km-photo-field">
+                      <div className={`km-wide km-photo-field${dishDrop.dragging ? " is-dragging" : ""}`} {...dishDrop.dropProps}>
                         <span>
                           Foto del plato{" "}
                           <span
@@ -2859,28 +2866,30 @@ export default function KitchenDashboard({
                             *
                           </span>
                         </span>
-                        <button
-                          type="button"
-                          className="km-outline-button km-upload"
-                          disabled={photoBusy}
-                          onClick={() => dishPhotoInputRef.current?.click()}
-                        >
-                          <BrandCameraIcon size={18} />
-                          {photoBusy ? "Subiendo…" : "Subir foto"}
-                        </button>
-                        <input
-                          ref={dishPhotoInputRef}
-                          type="file"
-                          accept="image/png,image/jpeg"
-                          hidden
-                          disabled={photoBusy}
-                          onChange={(event) => {
-                            const file = event.currentTarget.files?.[0];
-                            event.currentTarget.value = "";
-                            void changeDishImage(file);
-                          }}
-                        />
-                        <small>PNG o JPG · máximo 2 MB</small>
+                        <div className="km-photo-drop">
+                          <button
+                            type="button"
+                            className="km-outline-button km-upload"
+                            disabled={photoBusy}
+                            onClick={() => dishPhotoInputRef.current?.click()}
+                          >
+                            <BrandCameraIcon size={18} />
+                            {photoBusy ? "Subiendo…" : "Subir foto"}
+                          </button>
+                          <input
+                            ref={dishPhotoInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg"
+                            hidden
+                            disabled={photoBusy}
+                            onChange={(event) => {
+                              const file = event.currentTarget.files?.[0];
+                              event.currentTarget.value = "";
+                              void changeDishImage(file);
+                            }}
+                          />
+                          <small>PNG o JPG · máximo 2 MB<span className="km-drop-hint"> · o arrastra aquí</span></small>
+                        </div>
                         {dish.imageUrl && (
                           <img
                             className="km-dish-preview"

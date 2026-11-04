@@ -74,6 +74,7 @@ import KitchenDashboard, {
 } from "./KitchenDashboard";
 import { CustomizationDialog } from "./components/CustomizationDialog";
 import { InstallPrompt } from "./components/InstallPrompt";
+import { useImageDrop } from "./components/useImageDrop";
 import { cachedRequest, cachedValue, invalidateCache } from "./data/queryCache";
 
 type SessionData = Pick<Bootstrap, "user" | "careers">;
@@ -3381,7 +3382,6 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  if (!order.paymentCheckoutId || order.paymentStatus !== "awaiting_proof") return null;
   function chooseFile(nextFile: File | null) {
     setError("");
     if (nextFile && (nextFile.size > 2_000_000 || !["image/png", "image/jpeg"].includes(nextFile.type))) {
@@ -3391,6 +3391,8 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
     }
     setFile(nextFile);
   }
+  const { dragging, dropProps } = useImageDrop(chooseFile, busy);
+  if (!order.paymentCheckoutId || order.paymentStatus !== "awaiting_proof") return null;
   async function upload() {
     if (!file || !order.paymentCheckoutId) return;
     setBusy(true);
@@ -3419,7 +3421,7 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
     </div>
     <div className="yape-upload-panel">
       <div><strong>Sube tu comprobante</strong><span>PNG o JPG · máximo 2 MB</span></div>
-      <label className={`yape-upload${file ? " yape-upload-selected" : ""}`}>
+      <label className={`yape-upload${file ? " yape-upload-selected" : ""}${dragging ? " is-dragging" : ""}`} {...dropProps}>
         <input className="sr-only" type="file" accept="image/png,image/jpeg" onChange={(event) => {
           const nextFile = event.target.files?.[0] || null;
           chooseFile(nextFile);
@@ -3429,6 +3431,7 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
         <span>{file ? file.name : "Elegir foto del comprobante"}</span>
         {file && <small>Cambiar</small>}
       </label>
+      <small className="yape-drop-hint">También puedes arrastrar la foto aquí.</small>
       <Button onClick={upload} disabled={!file || busy}>{busy ? "Subiendo…" : "Enviar comprobante"}</Button>
     </div>
     {error && <p className="form-error" role="alert">{error}</p>}

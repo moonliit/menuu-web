@@ -436,6 +436,31 @@
 .km-upload {
   justify-self: start;
 }
+.km-photo-drop {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px;
+  border: 1px dashed var(--color-border);
+  border-radius: 16px;
+  transition: background 200ms, border-color 200ms;
+}
+.km-profile-photo .km-photo-drop { width: 100%; }
+.km-photo-field .km-photo-drop { width: min(100%, 320px); }
+.km-profile-photo.is-dragging .km-photo-drop,
+.km-photo-field.is-dragging .km-photo-drop {
+  border-color: var(--color-brand);
+  background: var(--color-orange-soft);
+}
+.km-photo-drop small {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .km-drop-hint { display: none; }
+}
 .km-dish-preview {
   width: 140px;
   height: 110px;
@@ -818,7 +843,7 @@
   .km-profile-photo img {
     width: 92px;
     height: 92px;
-    grid-row: span 2;
+    grid-row: 1;
     border-radius: 18px;
   }
   .km-profile .account-intro .button {

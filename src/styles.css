@@ -4303,7 +4303,9 @@ p {
 .yape-upload-selected { border-style: solid; }
 .yape-upload > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .yape-upload > small { margin-left: auto; font-size: 13px; text-decoration: underline; }
-.yape-upload-panel .button { grid-column: 2; grid-row: 1 / 3; min-height: 48px; }
+.yape-drop-hint { grid-column: 1; color: var(--color-muted); font-size: 12px; }
+.yape-upload.is-dragging { border-color: var(--color-brand); background: var(--color-orange-soft); box-shadow: 0 0 0 3px rgb(7 83 56 / 12%); }
+.yape-upload-panel .button { grid-column: 2; grid-row: 2; min-height: 48px; }
 @media (max-width: 700px) {
   .yape-payment-dialog { position: fixed; inset: auto 0 0; width: 100%; max-width: none; max-height: calc(100dvh - 16px); margin: 0; border-radius: 24px 24px 0 0; }
   .yape-payment-scroll { max-height: calc(100dvh - 18px); padding: 20px 18px calc(20px + env(safe-area-inset-bottom)); border-radius: 23px 23px 0 0; }
@@ -4315,6 +4317,7 @@ p {
   .yape-qr { max-width: 210px; }
   .yape-upload-panel { grid-template-columns: 1fr; }
   .yape-upload, .yape-upload-panel .button { grid-column: 1; grid-row: auto; width: 100%; }
+  .yape-drop-hint { display: none; }
 }
 .yape-status { margin: 10px 0; color: var(--color-brand); font-weight: 600; }
 .yape-cancel-note { margin: 8px 0; color: var(--color-muted); font-size: 14px; }
