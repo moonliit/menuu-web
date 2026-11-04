@@ -2911,7 +2911,7 @@ export default function KitchenDashboard({
                         }
                       />
                     </label>
-                    <label>
+                    <label className="km-offer-time-field">
                       Hora de recojo
                       <input
                         type="time"
@@ -2925,7 +2925,7 @@ export default function KitchenDashboard({
                         }
                       />
                     </label>
-                    <label>
+                    <label className="km-offer-time-field">
                       Fin de recojo
                       <input
                         type="time"

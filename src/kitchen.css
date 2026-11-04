@@ -395,6 +395,9 @@
   font-weight: 400;
   color: var(--color-muted);
 }
+.km-form-grid .km-offer-time-field {
+  align-content: start;
+}
 .km-wide {
   grid-column: 1/-1;
 }
