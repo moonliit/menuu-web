@@ -237,7 +237,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     await submitPaymentProof(
       consumers[0].id,
       first[0].paymentCheckoutId,
-      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG1sAAAAASUVORK5CYII=", "base64"),
+      Buffer.from("comprobante pendiente de revision manual"),
       "image/png",
     );
     assert.equal((await pendingPayments()).length, 1);

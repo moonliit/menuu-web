@@ -26,20 +26,12 @@ export async function expireUnpaidCheckouts() {
   });
 }
 
-export function proofImageMime(bytes) {
-  if (!Buffer.isBuffer(bytes)) return null;
-  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
-  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "image/jpeg";
-  if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp";
-  if (bytes.length >= 6 && ["GIF87a", "GIF89a"].includes(bytes.toString("ascii", 0, 6))) return "image/gif";
-  return null;
-}
-
-export async function submitPaymentProof(userId, checkoutId, bytes) {
+export async function submitPaymentProof(userId, checkoutId, bytes, declaredMime) {
   if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 3_000_000)
     fail("Sube una imagen de hasta 3 MB.", 413);
-  const mime = proofImageMime(bytes);
-  if (!mime) fail("El comprobante debe ser PNG, JPG, JPEG, WebP o GIF.");
+  const mime = declaredMime === "image/jpg" || declaredMime === "image/pjpeg" ? "image/jpeg" : declaredMime;
+  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mime))
+    fail("El comprobante debe ser PNG, JPG, JPEG, WebP o GIF.");
   return transaction(async (db) => {
     const checkout = (await db.query(
       "SELECT id,status,expires_at AS \"expiresAt\" FROM payment_checkouts WHERE id=$1 AND user_id=$2",

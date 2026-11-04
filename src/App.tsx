@@ -3393,10 +3393,12 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
     setBusy(true);
     setError("");
     try {
+      const extension = file.name.split(".").pop()?.toLowerCase();
+      const declaredMime = ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" } as Record<string, string>)[extension || ""] || file.type || "application/octet-stream";
       const csrf = document.cookie.split(";").map((part) => part.trim())
         .find((part) => part.startsWith("menuu_csrf="))?.slice("menuu_csrf=".length);
       const response = await fetch(`/api/payments/${order.paymentCheckoutId}/proof`, {
-        method: "POST", headers: { "Content-Type": file.type || "application/octet-stream", ...(csrf ? { "X-CSRF-Token": csrf } : {}) }, body: file,
+        method: "POST", headers: { "Content-Type": declaredMime, ...(csrf ? { "X-CSRF-Token": csrf } : {}) }, body: file,
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "No pudimos subir el comprobante.");

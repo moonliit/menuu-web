@@ -661,6 +661,7 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/reviews/pending") {
     const user = await userFromSession(sessionToken(req));
     if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+    const declaredMime = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
     return json(res, 200, { review: await pendingReviewPrompt(user.id) });
   }
 
@@ -702,7 +703,7 @@ async function handleApi(req, res, url) {
       }
     }
     if (size > 3_000_000) return error(res, 413, "La imagen supera 3 MB.");
-    return json(res, 200, await submitPaymentProof(user.id, proofMatch[1], Buffer.concat(chunks)));
+    return json(res, 200, await submitPaymentProof(user.id, proofMatch[1], Buffer.concat(chunks), declaredMime));
   }
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
