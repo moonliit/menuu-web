@@ -36,6 +36,7 @@ import {
   kitchenData,
   kitchenImage,
   kitchenStudentCandidates,
+  removeKitchenReservation,
   saveDish,
   saveKitchenImage,
   saveOffer,
@@ -522,6 +523,10 @@ async function handleApi(req, res, url) {
       const kitchenId = await adminOrderKitchen(data?.orderId);
       return json(res, 201, await addExtraPortion(kitchenId, user.id, data));
     }
+    if (url.pathname === "/api/admin/reservations/remove") {
+      const kitchenId = await adminOrderKitchen(data?.orderId);
+      return json(res, 200, await removeKitchenReservation(kitchenId, user.id, data));
+    }
     if (url.pathname === "/api/admin/reservations/update") {
       const kitchenId = await adminOrderKitchen(data?.orderId);
 
@@ -629,6 +634,9 @@ async function handleApi(req, res, url) {
       );
     if (url.pathname === "/api/kitchen/reservations/extra")
       return json(res, 201, await addExtraPortion(user.kitchenId, user.id, data));
+
+    if (url.pathname === "/api/kitchen/reservations/remove")
+      return json(res, 200, await removeKitchenReservation(user.kitchenId, user.id, data));
 
     if (url.pathname === "/api/kitchen/reservations/update")
       return json(

@@ -924,9 +924,13 @@ function KitchenReservationPanel({
   const paymentDialogRef = useRef<HTMLDialogElement>(null);
   const extraDialogRef = useRef<HTMLDialogElement>(null);
   const [extraItem, setExtraItem] = useState<KitchenReservation | null>(null);
+  const removeDialogRef = useRef<HTMLDialogElement>(null);
+  const [removeItem, setRemoveItem] = useState<KitchenReservation | null>(null);
+  const [removeError, setRemoveError] = useState("");
   const [extraQuantity, setExtraQuantity] = useState("1");
   const [extraMethod, setExtraMethod] = useState("");
   useEffect(() => { if (extraItem) extraDialogRef.current?.showModal(); }, [extraItem]);
+  useEffect(() => { if (removeItem) removeDialogRef.current?.showModal(); }, [removeItem]);
   useEffect(() => {
     if (paymentPrompt) paymentDialogRef.current?.showModal();
   }, [paymentPrompt]);
@@ -1100,6 +1104,21 @@ function KitchenReservationPanel({
       setError(cause instanceof Error ? cause.message : "No pudimos registrar la porción adicional.");
     } finally { setBusyOrder(""); }
   }
+  async function removeManualReservation() {
+    if (!removeItem) return;
+    setBusyOrder(removeItem.orderId);
+    setRemoveError("");
+    try {
+      await request(`${apiPrefix}/reservations/remove`, { orderId: removeItem.orderId });
+      await onChanged();
+      setRefreshStudents((value) => value + 1);
+      removeDialogRef.current?.close();
+    } catch (cause) {
+      setRemoveError(cause instanceof Error ? cause.message : "No pudimos eliminar el alta manual.");
+    } finally {
+      setBusyOrder("");
+    }
+  }
   const pickupEndTime = new Date(
     `${offer.date}T${offer.pickupUntil}:00-05:00`,
   ).getTime();
@@ -1229,7 +1248,21 @@ function KitchenReservationPanel({
                     </small>
                   </div>
                   <div className="km-reservation-manage">
-                    <span className="km-reservation-state">{state}</span>
+                    <div className="km-reservation-headline">
+                      <span className="km-reservation-state">{state}</span>
+                      {item.manualAdded && item.status === "reservado" && (
+                        <button
+                          type="button"
+                          className="km-remove-manual"
+                          aria-label={`Eliminar alta manual de ${item.studentName}`}
+                          title="Eliminar alta manual"
+                          disabled={!!busyOrder}
+                          onClick={() => { setRemoveError(""); setRemoveItem(item); }}
+                        >
+                          <X size={18} aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
                     {apiPrefix === "/api/admin" &&
                       item.fulfillmentStatus === "delivered" &&
                       item.status === "reservado" && (
@@ -1480,6 +1513,16 @@ function KitchenReservationPanel({
         <KitchenSelect id="km-extra-method" withinDialog label="Medio de pago de esta venta" value={extraMethod} placeholder="Selecciona un método"
           options={["QR", "Efectivo", "Transferencia", "Otro"].map((value) => ({ value, label: value }))} onChange={setExtraMethod} />
         <div className="km-payment-actions"><Button variant="secondary" onClick={() => extraDialogRef.current?.close()}>Volver</Button><Button disabled={!!busyOrder || !extraMethod || !extraQuantity} onClick={saveExtra}>{busyOrder ? "Guardando…" : "Registrar venta"}</Button></div>
+      </dialog>
+      <dialog ref={removeDialogRef} className="km-payment-dialog" aria-labelledby="km-remove-title" onClose={() => { setRemoveItem(null); setRemoveError(""); }}>
+        <span className="eyebrow">CONFIRMAR ELIMINACIÓN</span>
+        <h2 id="km-remove-title">¿Eliminar esta alta manual?</h2>
+        <p>Se quitará la reserva de {removeItem?.studentName} y se liberarán sus porciones. La acción quedará registrada para auditoría.</p>
+        {removeError && <p className="km-reservations-error" role="alert">{removeError}</p>}
+        <div className="km-payment-actions">
+          <Button variant="secondary" disabled={!!busyOrder} onClick={() => removeDialogRef.current?.close()}>Volver</Button>
+          <Button disabled={!!busyOrder} onClick={removeManualReservation}>{busyOrder ? "Eliminando…" : "Sí, eliminar alta"}</Button>
+        </div>
       </dialog>
       <dialog
         ref={paymentDialogRef}

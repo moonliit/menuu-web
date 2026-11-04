@@ -100,6 +100,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     addExtraPortion,
     addKitchenReservation,
     kitchenStudentCandidates,
+    removeKitchenReservation,
     updateKitchenReservation,
   } = await import("../server/kitchen.mjs");
   const { handleRequest } = await import("../server/index.mjs");
@@ -1503,8 +1504,35 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       bookingDeadline: `${offerDate}T14:00:00-05:00`, capacity: 1,
     }), /máximo 1 hora/);
     await assert.rejects(db.query("UPDATE offers SET pickup_until_extended='16:01' WHERE id=$1", [hourOffer]));
+    const manualStudentId = (await db.query("SELECT id FROM users WHERE email='pre@utec.edu.pe'")).rows[0].id;
+    const accidental = await addKitchenReservation("test-kitchen", "kitchen-actor", {
+      offerId: hourOffer, studentId: manualStudentId, quantity: 1,
+    });
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [hourOffer])).rows[0].count, 1);
+    await assert.rejects(removeKitchenReservation("another-kitchen", "admin-actor", { orderId: accidental.orderId }), { status: 404 });
+    await assert.rejects(removeKitchenReservation("test-kitchen", "admin-actor", { orderId: prepaid.id }), { status: 409 });
+    await removeKitchenReservation("test-kitchen", "admin-actor", { orderId: accidental.orderId });
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [hourOffer])).rows[0].count, 0);
+    assert.equal((await getOrders(manualStudentId)).some((order) => order.id === accidental.orderId), false);
+    assert.equal((await kitchenData("test-kitchen")).reservations.some((item) => item.orderId === accidental.orderId), false);
+    assert.equal((await kitchenStudentCandidates("test-kitchen", hourOffer, "pre@")).find((student) => student.id === manualStudentId)?.alreadyAdded, false);
+    assert.equal((await db.query("SELECT actor_user_id AS actor FROM kitchen_reservation_events WHERE order_id=$1 AND action='manual_remove'", [accidental.orderId])).rows[0].actor, "admin-actor");
+    await assert.rejects(removeKitchenReservation("test-kitchen", "admin-actor", { orderId: accidental.orderId }), { status: 409 });
+    const deliveredManual = (await db.query(
+      `SELECT r.id,r.user_id AS "userId",i.offer_id AS "offerId",i.delivered_quantity AS units
+       FROM orders r JOIN order_items i ON i.order_id=r.id
+       WHERE r.kitchen_id='test-kitchen' AND r.status='reservado' AND r.fulfillment_status='delivered'
+         AND EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_add')
+         AND NOT EXISTS(SELECT 1 FROM order_reviews v WHERE v.order_id=r.id)
+       LIMIT 1`,
+    )).rows[0];
+    assert.ok(deliveredManual);
+    const beforeDeliveredRemoval = (await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [deliveredManual.offerId])).rows[0].count;
+    await removeKitchenReservation("test-kitchen", "kitchen-actor", { orderId: deliveredManual.id });
+    assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [deliveredManual.offerId])).rows[0].count, beforeDeliveredRemoval - deliveredManual.units);
+    assert.equal((await getOrders(deliveredManual.userId)).some((order) => order.id === deliveredManual.id), false);
     console.log(
-      "libSQL: migración, reserva, Yape, aprobación, porción adicional y vencimiento correctos.",
+      "libSQL: migración, reserva, Yape, aprobación, porción adicional, anulación manual y vencimiento correctos.",
     );
   } finally {
     await closeDb();

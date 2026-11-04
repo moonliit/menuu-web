@@ -1121,6 +1121,32 @@
   color: var(--reservation-ink);
   margin-bottom: 8px;
 }
+.km-reservation-headline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.km-remove-manual {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-top: -6px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-error);
+}
+.km-remove-manual:hover:not(:disabled) {
+  border-color: var(--color-error);
+  background: var(--color-status-cancelled-bg);
+}
+.km-remove-manual:focus-visible {
+  outline: 3px solid var(--color-orange-soft);
+  outline-offset: 2px;
+}
 .km-delivery-time {
   display: block;
   margin: 0 0 8px;

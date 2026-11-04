@@ -63,6 +63,7 @@ export async function adminData({
        LEFT JOIN payment_checkouts p ON p.id=r.payment_checkout_id
        JOIN users u ON u.id=r.user_id JOIN offers o ON o.id=i.offer_id
        WHERE i.offer_id=ANY($1::text[])
+         AND NOT EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_remove')
        ORDER BY o.offer_date,o.delivery_time,u.name,r.created_at`,
         [offerIds],
       )

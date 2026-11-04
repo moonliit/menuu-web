@@ -258,6 +258,7 @@ export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
          EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='extra_portion') AS "extraPortion"
          FROM orders r JOIN order_items i ON i.order_id=r.id JOIN users u ON u.id=r.user_id JOIN offers o ON o.id=i.offer_id LEFT JOIN payment_checkouts p ON p.id=r.payment_checkout_id
          WHERE r.kitchen_id=$1 AND o.kitchen_id=$1 AND o.offer_date >= $2 AND o.offer_date < date($2, '+14 days')
+           AND NOT EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_remove')
          ORDER BY o.offer_date,o.delivery_time,u.name,r.created_at`,
       [kitchenId, start],
     ),
@@ -444,6 +445,64 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
     );
 
     return { orderId, orderItemId: addedItem.rows[0].id, extraordinary };
+  });
+}
+
+export async function removeKitchenReservation(kitchenId, actorId, data) {
+  const orderId = typeof data?.orderId === "string" ? data.orderId : "";
+  if (!orderId) fail("Selecciona el alta manual que quieres eliminar.");
+
+  return transaction(async (db) => {
+    const order = (await db.query(
+      `SELECT id,status,fulfillment_status AS "fulfillmentStatus",payment_checkout_id AS "paymentCheckoutId",
+       EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=orders.id AND e.action='manual_add') AS "manualAdded",
+       EXISTS(SELECT 1 FROM order_reviews r WHERE r.order_id=orders.id) AS "hasReview"
+       FROM orders WHERE id=$1 AND kitchen_id=$2`,
+      [orderId, kitchenId],
+    )).rows[0];
+    if (!order) fail("Reserva no encontrada.", 404);
+    if (!order.manualAdded || order.paymentCheckoutId)
+      fail("Solo se pueden eliminar altas manuales sin Yape anticipado.", 409);
+    if (order.status !== "reservado") fail("Esta alta manual ya fue anulada.", 409);
+    if (order.hasReview)
+      fail("Esta entrega ya tiene una reseña. Contacta a administración para revisarla.", 409);
+
+    const items = (await db.query(
+      `SELECT i.offer_id AS "offerId",i.quantity,i.delivered_quantity AS "deliveredQuantity"
+       FROM order_items i JOIN offers o ON o.id=i.offer_id
+       WHERE i.order_id=$1 AND o.kitchen_id=$2`,
+      [orderId, kitchenId],
+    )).rows;
+    if (!items.length) fail("La reserva no tiene platos de esta cocina.", 409);
+    const released = new Map();
+    for (const item of items) {
+      const units = order.fulfillmentStatus === "no_show"
+        ? 0
+        : order.fulfillmentStatus === "delivered"
+          ? (item.deliveredQuantity ?? item.quantity)
+          : item.quantity;
+      released.set(item.offerId, (released.get(item.offerId) || 0) + units);
+    }
+    for (const [offerId, units] of released) {
+      if (!units) continue;
+      const changed = await db.query(
+        `UPDATE offers SET reserved_count=reserved_count-$3,sold_out_at=NULL
+         WHERE id=$1 AND kitchen_id=$2 AND reserved_count>=$3 RETURNING id`,
+        [offerId, kitchenId, units],
+      );
+      if (!changed.rowCount) fail("No se pudo liberar el cupo de este menú.", 409);
+    }
+    const now = new Date().toISOString();
+    await db.query(
+      `UPDATE orders SET status='cancelado',review_enabled=0,cancelled_at=$3
+       WHERE id=$1 AND kitchen_id=$2 AND status='reservado'`,
+      [orderId, kitchenId, now],
+    );
+    await db.query(
+      "INSERT INTO kitchen_reservation_events(id,order_id,actor_user_id,action,detail) VALUES($1,$2,$3,'manual_remove',$4)",
+      [randomUUID(), orderId, actorId, `Alta manual anulada; ${[...released.values()].reduce((sum, units) => sum + units, 0)} porción(es) liberada(s)`],
+    );
+    return { ok: true };
   });
 }
 

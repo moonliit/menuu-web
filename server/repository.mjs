@@ -343,7 +343,9 @@ export async function getOrders(userId, page = null) {
     o.total_cents AS "totalCents",o.created_at AS "createdAt" FROM orders o
     LEFT JOIN order_reviews r ON r.order_id=o.id
     LEFT JOIN payment_checkouts p ON p.id=o.payment_checkout_id
-    WHERE o.user_id=$1 ORDER BY o.created_at DESC,o.id DESC${paged ? " LIMIT $2 OFFSET $3" : ""}`,
+    WHERE o.user_id=$1
+      AND NOT EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=o.id AND e.action='manual_remove')
+    ORDER BY o.created_at DESC,o.id DESC${paged ? " LIMIT $2 OFFSET $3" : ""}`,
     paged ? [userId, page.limit, page.offset] : [userId],
   );
 
@@ -423,7 +425,7 @@ export async function getOrders(userId, page = null) {
 export async function getOrdersPage(userId, { limit = 10, offset = 0 } = {}) {
   const [orders, count] = await Promise.all([
     getOrders(userId, { limit, offset }),
-    getDb().query("SELECT count(*) AS total FROM orders WHERE user_id=$1", [
+    getDb().query("SELECT count(*) AS total FROM orders o WHERE o.user_id=$1 AND NOT EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=o.id AND e.action='manual_remove')", [
       userId,
     ]),
   ]);
