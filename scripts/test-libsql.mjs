@@ -93,7 +93,9 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     insertUser,
     linkGoogleSub,
     submitReview,
+    userFromSession,
   } = await import("../server/repository.mjs");
+  const { adminUsers, adminUserOrders, setUserBan } = await import("../server/users.mjs");
   const { kitchenData, kitchenImage, saveDish, saveKitchenImage, saveOffer } =
     await import("../server/kitchen.mjs");
   const {
@@ -682,6 +684,12 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       assert.equal((await fetch(`${base}/api/kitchens/test-kitchen/reviews`)).status, 200);
       assert.equal((await fetch(`${base}/api/admin/reviews`)).status, 401);
       assert.equal((await fetch(`${base}/api/admin/reviews`, { headers: { Cookie: adminCookie } })).status, 200);
+      assert.equal((await fetch(`${base}/api/admin/users`)).status, 401);
+      const adminUsersResponse = await fetch(`${base}/api/admin/users?q=admin%40menuu.test`, { headers: { Cookie: adminCookie } });
+      assert.equal(adminUsersResponse.status, 200);
+      assert.equal((await adminUsersResponse.json()).users[0].role, "admin");
+      assert.equal((await fetch(`${base}/api/admin/users/${consumers[0].id}/orders`, { headers: { Cookie: adminCookie } })).status, 200);
+      assert.equal((await fetch(`${base}/api/admin/users/${consumers[0].id}/ban`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ action: "invalid" }) })).status, 400);
       assert.equal((await fetch(`${base}/api/admin/data`)).status, 401);
       assert.equal(
         (await fetch(`${base}/api/admin/data`, { headers: { Cookie: cookie } }))
@@ -1580,6 +1588,17 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     await removeKitchenReservation("test-kitchen", "kitchen-actor", { orderId: deliveredManual.id });
     assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [deliveredManual.offerId])).rows[0].count, beforeDeliveredRemoval - deliveredManual.units);
     assert.equal((await getOrders(deliveredManual.userId)).some((order) => order.id === deliveredManual.id), false);
+    const listed = await adminUsers({ q: consumers[0].email, limit: 20, offset: 0 });
+    assert.equal(listed.total, 1);
+    assert.equal(listed.users[0].orderCount, (await adminUserOrders(consumers[0].id, { limit: 10, offset: 0 })).total);
+    const banToken = "f".repeat(64);
+    await insertSession(banToken, consumers[0].id);
+    assert.equal((await userFromSession(banToken)).id, consumers[0].id);
+    await setUserBan("admin-actor", consumers[0].id, "ban");
+    assert.equal(await userFromSession(banToken), null);
+    await assert.rejects(setUserBan("admin-actor", "admin-actor", "ban"), { status: 403 });
+    await setUserBan("admin-actor", consumers[0].id, "restore");
+    assert.equal((await adminUsers({ q: consumers[0].email })).users[0].bannedAt, null);
     console.log(
       "libSQL: migración, reserva, Yape, aprobación, porción adicional, persona provisional, anulación manual y vencimiento correctos.",
     );

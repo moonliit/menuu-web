@@ -14,6 +14,8 @@ import {
   ChevronRight,
   CircleAlert,
   Info,
+  ShieldBan,
+  UserRoundCheck,
   X,
 } from "lucide-react";
 import { Button } from "./components/ui";
@@ -35,6 +37,7 @@ import {
   timeLabel,
   weekDate,
   type CustomizationGroup,
+  type Order,
   type User,
 } from "./data/catalog";
 import "./kitchen.css";
@@ -1626,12 +1629,14 @@ function KitchenReservationPanel({
           </p>
         )}
       </div>
-      {canAdd && !linkingPlaceholderId && <form className="km-placeholder-form" onSubmit={addProvisional}>
-        <div><h3>Persona sin cuenta</h3><p>Aparta porciones ahora y vincula su cuenta cuando se registre.</p></div>
-        <label>Nombre de referencia<input value={placeholderName} maxLength={80} required minLength={2} onChange={(event) => setPlaceholderName(event.target.value)} placeholder="Nombre de la persona" /></label>
-        <KitchenSelect id={`placeholder-quantity-${offer.id}`} label="Porciones" value={placeholderQuantity} options={Array.from({ length: Math.min(10, offer.capacity - offer.reservedCount) }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }))} onChange={setPlaceholderQuantity} />
-        <Button type="submit" disabled={!!busyOrder || placeholderName.trim().length < 2}>{busyOrder ? "Apartando…" : "Apartar porciones"}</Button>
-      </form>}
+      {canAdd && !linkingPlaceholderId && <details className="km-placeholder-form">
+        <summary><span><h3>Persona sin cuenta</h3><p>Aparta porciones ahora y vincula su cuenta cuando se registre.</p></span><ChevronDown size={20} aria-hidden="true" /></summary>
+        <form onSubmit={addProvisional}>
+          <label>Nombre de referencia<input value={placeholderName} maxLength={80} required minLength={2} onChange={(event) => setPlaceholderName(event.target.value)} placeholder="Nombre de la persona" /></label>
+          <KitchenSelect id={`placeholder-quantity-${offer.id}`} label="Porciones" value={placeholderQuantity} options={Array.from({ length: Math.min(10, offer.capacity - offer.reservedCount) }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }))} onChange={setPlaceholderQuantity} />
+          <Button type="submit" disabled={!!busyOrder || placeholderName.trim().length < 2}>{busyOrder ? "Apartando…" : "Apartar porciones"}</Button>
+        </form>
+      </details>}
       <dialog ref={extraDialogRef} className="km-payment-dialog" aria-labelledby="km-extra-title" onClose={() => setExtraItem(null)}>
         <span className="eyebrow">VENTA EN EL RECOJO</span>
         <h2 id="km-extra-title">Porción adicional</h2>
@@ -3813,5 +3818,85 @@ export function AdminReviewsDashboard({ user, onLogout }: { user: User; onLogout
       </article>)}</div> : <p className="km-empty">No hay comentarios en esta selección.</p>}
       {data.total > 10 && <nav className="km-pagination" aria-label="Páginas de comentarios"><Button type="button" variant="secondary" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>Anterior</Button><span>Página {page + 1} de {Math.ceil(data.total / 10)}</span><Button type="button" variant="secondary" disabled={(page + 1) * 10 >= data.total} onClick={() => setPage((current) => current + 1)}>Siguiente</Button></nav>}
     </>}
+  </section>;
+}
+
+type AdminUser = {
+  id: string; name: string; email: string; role: string; studentCode: string | null;
+  createdAt: string; bannedAt: string | null; orderCount: number;
+};
+type AdminUsersPage = { users: AdminUser[]; total: number };
+type AdminUserOrdersPage = { orders: Order[]; total: number };
+const adminRoleLabel = (role: string) => role === "consumer" ? "Estudiante" : role === "kitchen" ? "Cocina" : "Admin";
+const adminOrderStatus = (order: Order) => {
+  if (order.status === "reservado" && order.paymentCheckoutId && order.paymentStatus !== "approved")
+    return ({ awaiting_proof: "Yape pendiente", under_review: "Yape por verificar", rejected: "Yape rechazado", expired: "Pago vencido" } as Record<string, string>)[order.paymentStatus || ""] || "Reservado";
+  return ({ reservado: "Reservado", entregado: "Entregado", entregado_en_refri: "Entregado en refri", entrega_pendiente: "Entrega pendiente", no_se_presento: "No se presentó", cancelado: "Cancelado" } as Record<string, string>)[order.status] || order.status;
+};
+const adminDate = (value: string) => new Intl.DateTimeFormat("es-PE", { day: "2-digit", month: "short", year: "numeric", timeZone: "America/Lima" }).format(new Date(value));
+
+export function AdminUsersDashboard({ user, onLogout }: { user: User; onLogout: () => Promise<void> }) {
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const [data, setData] = useState<AdminUsersPage | null>(null);
+  const [selected, setSelected] = useState<AdminUser | null>(null);
+  const [orders, setOrders] = useState<AdminUserOrdersPage | null>(null);
+  const [ordersPage, setOrdersPage] = useState(0);
+  const [confirmUser, setConfirmUser] = useState<AdminUser | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [ordersError, setOrdersError] = useState("");
+  const ordersDialog = useRef<HTMLDialogElement>(null);
+  const banDialog = useRef<HTMLDialogElement>(null);
+
+  async function refresh() {
+    const result = await request<AdminUsersPage>(`/api/admin/users?q=${encodeURIComponent(query)}&limit=20&offset=${page * 20}`);
+    setData(result);
+    setError("");
+  }
+  useEffect(() => { refresh().catch((cause) => setError(cause instanceof Error ? cause.message : "No pudimos cargar los usuarios.")); }, [user.id, query, page]);
+  useEffect(() => {
+    if (!selected) return;
+    setOrders(null);
+    setOrdersError("");
+    request<AdminUserOrdersPage>(`/api/admin/users/${selected.id}/orders?limit=10&offset=${ordersPage * 10}`)
+      .then(setOrders).catch((cause) => setOrdersError(cause instanceof Error ? cause.message : "No pudimos cargar los pedidos."));
+  }, [selected?.id, ordersPage]);
+
+  async function changeBan() {
+    if (!confirmUser) return;
+    setBusy(true);
+    setError("");
+    try {
+      await request(`/api/admin/users/${confirmUser.id}/ban`, { action: confirmUser.bannedAt ? "restore" : "ban" });
+      banDialog.current?.close();
+      setConfirmUser(null);
+      await refresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "No pudimos cambiar el estado de la cuenta."); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="page-section admin-dashboard admin-users" aria-label="Usuarios">
+    <div className="page-heading admin-heading"><div><span className="eyebrow">CUENTAS REGISTRADAS</span><h1>Usuarios</h1><p>Consulta sus pedidos y gestiona el acceso a Menúu.</p></div><Button type="button" variant="secondary" onClick={onLogout}><BrandLogoutIcon size={18} /> Cerrar sesión</Button></div>
+    <form className="admin-users-search" onSubmit={(event) => { event.preventDefault(); setPage(0); setQuery(search.trim()); }}><label htmlFor="admin-user-search">Buscar por nombre, correo o código</label><div><input id="admin-user-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar usuario" maxLength={100} /><Button type="submit">Buscar</Button></div></form>
+    {error && <p className="km-alert" role="alert">{error}</p>}
+    {!data ? <p className="km-loading" role="status">Cargando usuarios…</p> : <>
+      <p className="admin-review-count">{data.total} {data.total === 1 ? "usuario" : "usuarios"}</p>
+      {data.users.length ? <div className="admin-users-list">{data.users.map((entry) => <article className="admin-user-row" key={entry.id}>
+        <div className="admin-user-identity"><strong>{entry.name}</strong><span>{entry.email}</span><small>{adminRoleLabel(entry.role)}{entry.studentCode ? ` · ${entry.studentCode}` : ""}</small></div>
+        <div className="admin-user-meta"><small>Cuenta creada</small><strong>{adminDate(entry.createdAt)}</strong></div>
+        <div className="admin-user-meta"><small>Pedidos</small><strong>{entry.orderCount}</strong></div>
+        <div className="admin-user-actions"><Button type="button" variant="secondary" onClick={() => { setSelected(entry); setOrdersPage(0); ordersDialog.current?.showModal(); }}>Ver pedidos</Button><button type="button" className={`admin-ban-button${entry.bannedAt ? " is-banned" : ""}`} disabled={entry.role === "admin"} title={entry.role === "admin" ? "Las cuentas de admin no se pueden banear" : entry.bannedAt ? "Restaurar usuario" : "Banear usuario"} aria-label={`${entry.bannedAt ? "Restaurar" : "Banear"} a ${entry.name}`} onClick={() => { setError(""); setConfirmUser(entry); banDialog.current?.showModal(); }}>{entry.bannedAt ? <UserRoundCheck size={20} /> : <ShieldBan size={20} />}</button></div>
+        {entry.bannedAt && <span className="admin-user-banned">Cuenta suspendida</span>}
+      </article>)}</div> : <p className="km-empty">No hay usuarios en esta selección.</p>}
+      {data.total > 20 && <nav className="km-pagination" aria-label="Páginas de usuarios"><Button type="button" variant="secondary" disabled={page === 0} onClick={() => setPage(page - 1)}>Anterior</Button><span>Página {page + 1} de {Math.ceil(data.total / 20)}</span><Button type="button" variant="secondary" disabled={(page + 1) * 20 >= data.total} onClick={() => setPage(page + 1)}>Siguiente</Button></nav>}
+    </>}
+    <dialog ref={ordersDialog} className="admin-users-dialog" aria-labelledby="admin-users-orders-title" onClose={() => { setSelected(null); setOrders(null); }}>
+      <div className="admin-users-dialog-head"><div><span className="eyebrow">HISTORIAL DE PEDIDOS</span><h2 id="admin-users-orders-title">{selected?.name}</h2><p>{selected?.email}</p></div><button type="button" className="admin-users-close" aria-label="Cerrar" onClick={() => ordersDialog.current?.close()}><X size={21} /></button></div>
+      {ordersError && <p className="km-alert" role="alert">{ordersError}</p>}
+      {!orders && !ordersError ? <p role="status">Cargando pedidos…</p> : orders && <><p className="admin-review-count">{orders.total} {orders.total === 1 ? "pedido" : "pedidos"}</p>{orders.orders.length ? <div className="admin-users-orders">{orders.orders.map((order) => <article key={order.id}><div><strong>{order.kitchenName}</strong><span className="admin-user-order-status">{adminOrderStatus(order)}</span></div><small>{dateLabel(order.date)} · {order.code}</small><p>{order.items.map((item) => `${item.quantity} × ${item.name}`).join(" · ")}</p><strong>{money(order.totalSoles)}</strong></article>)}</div> : <p className="km-empty">Todavía no tiene pedidos.</p>}{orders.total > 10 && <nav className="km-pagination" aria-label="Páginas de pedidos"><Button type="button" variant="secondary" disabled={ordersPage === 0} onClick={() => setOrdersPage(ordersPage - 1)}>Anterior</Button><span>Página {ordersPage + 1} de {Math.ceil(orders.total / 10)}</span><Button type="button" variant="secondary" disabled={(ordersPage + 1) * 10 >= orders.total} onClick={() => setOrdersPage(ordersPage + 1)}>Siguiente</Button></nav>}</>}
+    </dialog>
+    <dialog ref={banDialog} className="km-payment-dialog" aria-labelledby="admin-ban-title" onClose={() => setConfirmUser(null)}><span className="eyebrow">CONFIRMAR ACCIÓN</span><h2 id="admin-ban-title">{confirmUser?.bannedAt ? "¿Restaurar cuenta?" : "¿Banear usuario?"}</h2><p>{confirmUser?.bannedAt ? `${confirmUser?.name} volverá a poder iniciar sesión.` : `${confirmUser?.name} perderá acceso a Menúu, incluso en sus sesiones abiertas. Sus pedidos se conservarán.`}</p>{error && <p className="km-alert" role="alert">{error}</p>}<div className="km-payment-actions"><Button type="button" variant="secondary" disabled={busy} onClick={() => banDialog.current?.close()}>Volver</Button><Button type="button" disabled={busy} onClick={changeBan}>{busy ? "Guardando…" : confirmUser?.bannedAt ? "Sí, restaurar" : "Sí, banear"}</Button></div></dialog>
   </section>;
 }

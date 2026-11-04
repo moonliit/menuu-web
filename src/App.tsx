@@ -72,6 +72,7 @@ import {
 import KitchenDashboard, {
   AdminDashboard,
   AdminReviewsDashboard,
+  AdminUsersDashboard,
   type KitchenSection,
 } from "./KitchenDashboard";
 import { CustomizationDialog } from "./components/CustomizationDialog";
@@ -109,7 +110,8 @@ type Page =
   | "cocinaCuenta"
   | "admin"
   | "adminPedidos"
-  | "adminComentarios";
+  | "adminComentarios"
+  | "adminUsuarios";
 type PickupOption = { key: string; start: string; end: string };
 const validStudentCode = (code: string) =>
   /^(?:[0-9]{9}|[0-9]{4}PRE[0-9]{7,8}|[0-9]{5}PRE[A-Z]{2}[0-9]{5})$/.test(code);
@@ -130,6 +132,7 @@ const routes: Record<Page, string> = {
   admin: "#admin",
   adminPedidos: "#admin/pedidos",
   adminComentarios: "#admin/comentarios",
+  adminUsuarios: "#admin/usuarios",
 };
 const kitchenPages: Page[] = [
   "cocinaInicio",
@@ -1640,6 +1643,7 @@ export default function App() {
         "admin",
         "adminPedidos",
         "adminComentarios",
+        "adminUsuarios",
       ].includes(page) &&
       session.user?.role !== "kitchen" &&
       session.user?.role !== "admin";
@@ -1840,7 +1844,7 @@ export default function App() {
       setPage("cocinaCuenta");
       window.scrollTo({ top: 0, behavior: "auto" });
     }
-    if (state?.user?.role === "admin" && !["adminPedidos", "adminComentarios"].includes(page)) {
+    if (state?.user?.role === "admin" && !["adminPedidos", "adminComentarios", "adminUsuarios"].includes(page)) {
       window.history.replaceState(null, "", routes.adminPedidos);
       setPage("adminPedidos");
       window.scrollTo({ top: 0, behavior: "auto" });
@@ -2289,7 +2293,7 @@ export default function App() {
   const adminSession = state?.user?.role === "admin";
   const adminArea =
     !kitchenSession &&
-    (page === "admin" || page === "adminPedidos" || page === "adminComentarios" || adminSession);
+    (page === "admin" || page === "adminPedidos" || page === "adminComentarios" || page === "adminUsuarios" || adminSession);
   const kitchenArea =
     !adminSession &&
     (page === "cocina" || kitchenPages.includes(page) || kitchenSession);
@@ -2347,6 +2351,7 @@ export default function App() {
                 {adminSession ? "Pedidos y entregas" : "Acceso admin"}
               </a>
               {adminSession && <a href={routes.adminComentarios} aria-current={page === "adminComentarios" ? "page" : undefined} onClick={(event) => follow(event, "adminComentarios")}>Comentarios</a>}
+              {adminSession && <a href={routes.adminUsuarios} aria-current={page === "adminUsuarios" ? "page" : undefined} onClick={(event) => follow(event, "adminUsuarios")}>Usuarios</a>}
             </nav>
           ) : kitchenArea ? (
             <nav
@@ -2451,6 +2456,8 @@ export default function App() {
           (adminSession ? (
             page === "adminComentarios"
               ? <AdminReviewsDashboard user={state.user!} onLogout={adminLogout} />
+              : page === "adminUsuarios"
+                ? <AdminUsersDashboard user={state.user!} onLogout={adminLogout} />
               : <AdminDashboard user={state.user!} onLogout={adminLogout} />
           ) : (
             <KitchenAccess
@@ -2956,6 +2963,7 @@ export default function App() {
         <nav className="mobile-nav admin-mobile-nav" aria-label="Navegación de admin">
           <a href={routes.adminPedidos} aria-current={page === "adminPedidos" ? "page" : undefined} onClick={(event) => follow(event, "adminPedidos")}><span className="mobile-icon"><BrandOrdersIcon size={22} /></span><span>Pedidos</span></a>
           <a href={routes.adminComentarios} aria-current={page === "adminComentarios" ? "page" : undefined} onClick={(event) => follow(event, "adminComentarios")}><span className="mobile-icon"><Star size={22} /></span><span>Comentarios</span></a>
+          <a href={routes.adminUsuarios} aria-current={page === "adminUsuarios" ? "page" : undefined} onClick={(event) => follow(event, "adminUsuarios")}><span className="mobile-icon"><UserRound size={22} /></span><span>Usuarios</span></a>
         </nav>
       )}
       <InstallPrompt suppressed={Boolean(selected || dataNotice || notice || fridgeNotices || reviewPrompt || paymentPrompt || commentsKitchen)} />

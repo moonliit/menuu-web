@@ -1231,6 +1231,13 @@
 .km-placeholder-form .button {
   justify-self: start;
 }
+.km-placeholder-form { display: block; }
+.km-placeholder-form summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; cursor: pointer; list-style: none; min-height: 44px; }
+.km-placeholder-form summary::-webkit-details-marker { display: none; }
+.km-placeholder-form summary > svg { flex: none; transition: transform 200ms ease; }
+.km-placeholder-form[open] summary > svg { transform: rotate(180deg); }
+.km-placeholder-form summary:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 4px; border-radius: 8px; }
+.km-placeholder-form form { display: grid; gap: 12px; margin-top: 16px; }
 .km-placeholder-card {
   display: flex;
   align-items: center;

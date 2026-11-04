@@ -76,10 +76,43 @@
 .admin-review-card .button {
   margin-top: 2px;
 }
+.admin-users-search { display: grid; gap: 8px; max-width: 560px; margin: 24px 0 18px; font-weight: 500; }
+.admin-users-search > div { display: flex; gap: 8px; }
+.admin-users-search input { min-width: 0; flex: 1; min-height: 48px; padding: 8px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-field); background: white; color: var(--color-text); font: inherit; }
+.admin-users-search input:focus-visible, .admin-ban-button:focus-visible, .admin-users-close:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 3px; }
+.admin-users-list { display: grid; gap: 10px; }
+.admin-user-row { display: grid; grid-template-columns: minmax(180px, 1fr) 140px 80px auto; align-items: center; gap: 16px; padding: 16px 18px; border: 1px solid var(--color-border); border-radius: 18px; background: white; }
+.admin-user-identity, .admin-user-meta { display: grid; gap: 2px; min-width: 0; }
+.admin-user-identity strong { overflow-wrap: anywhere; color: var(--color-brand); }
+.admin-user-identity span { overflow-wrap: anywhere; font-size: 14px; }
+.admin-user-identity small, .admin-user-meta small { color: var(--color-muted); }
+.admin-user-actions { display: flex; align-items: center; gap: 8px; }
+.admin-ban-button, .admin-users-close { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--color-border); border-radius: 14px; background: white; color: var(--color-error); cursor: pointer; }
+.admin-ban-button:hover { background: var(--color-orange-soft); }
+.admin-ban-button.is-banned { color: var(--color-brand); }
+.admin-ban-button:disabled { opacity: .4; cursor: not-allowed; }
+.admin-user-banned { grid-column: 1 / -1; color: var(--color-error); font-size: 13px; font-weight: 600; }
+.admin-users-dialog { width: min(620px, calc(100vw - 32px)); max-height: min(720px, calc(100dvh - 40px)); padding: 24px; border: 1px solid var(--color-border); border-radius: 22px; background: var(--color-background); color: var(--color-text); box-shadow: 0 24px 70px rgb(7 83 56 / 20%); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--color-scroll-thumb) var(--color-scroll-track); }
+.admin-users-dialog::backdrop { background: rgb(10 31 22 / 55%); }
+.admin-users-dialog-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.admin-users-dialog h2 { margin: 4px 0; font: 500 28px/1.15 var(--font-display); color: var(--color-brand); }
+.admin-users-dialog-head p { margin: 0; overflow-wrap: anywhere; color: var(--color-muted); font-size: 14px; }
+.admin-users-close { flex: none; color: var(--color-brand); }
+.admin-users-orders { display: grid; gap: 10px; }
+.admin-users-orders article { padding: 14px; border: 1px solid var(--color-border); border-radius: 15px; background: white; }
+.admin-users-orders article > div { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.admin-user-order-status { padding: 3px 8px; border-radius: 99px; background: var(--color-orange-soft); color: var(--color-brand); font-size: 12px; font-weight: 600; }
+.admin-users-orders small { display: block; margin-top: 5px; color: var(--color-muted); }
+.admin-users-orders p { margin: 8px 0; font-size: 14px; }
 @media (max-width: 700px) {
-  .admin-mobile-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-mobile-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .admin-review-list { grid-template-columns: 1fr; }
   .admin-review-controls .km-select { flex: 1 1 100%; }
+  .admin-user-row { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .admin-user-identity { grid-column: 1 / -1; }
+  .admin-user-actions { grid-column: 1 / -1; }
+  .admin-user-meta { font-size: 14px; }
+  .admin-users-dialog { padding: 18px; }
 }
 .admin-controls {
   display: flex;

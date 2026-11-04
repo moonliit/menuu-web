@@ -211,7 +211,7 @@ export async function getCatalog(now = new Date()) {
 export async function findUserByEmail(email) {
   const result = await getDb().query(
     `SELECT u.id,u.name,u.email,u.role,u.kitchen_id AS "kitchenId",u.student_code AS "studentCode",u.career,u.birth_date AS "birthDate",u.password_hash AS "passwordHash",u.google_sub AS "googleSub",
-    NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='reservado' AND o.fulfillment_status='no_show') AS "bookingAllowed"
+    u.banned_at AS "bannedAt",NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='reservado' AND o.fulfillment_status='no_show') AS "bookingAllowed"
     FROM users u WHERE u.email=$1`,
     [email],
   );
@@ -222,7 +222,7 @@ export async function findUserByEmail(email) {
 export async function findUserByGoogleSub(googleSub) {
   const result = await getDb().query(
     `SELECT u.id,u.name,u.email,u.role,u.kitchen_id AS "kitchenId",u.student_code AS "studentCode",u.career,u.birth_date AS "birthDate",u.password_hash AS "passwordHash",u.google_sub AS "googleSub",
-    NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='reservado' AND o.fulfillment_status='no_show') AS "bookingAllowed"
+    u.banned_at AS "bannedAt",NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='reservado' AND o.fulfillment_status='no_show') AS "bookingAllowed"
     FROM users u WHERE u.google_sub=$1`,
     [googleSub],
   );
@@ -264,7 +264,7 @@ export async function userFromSession(token) {
   const result = await getDb().query(
     `SELECT u.id,u.name,u.email,u.role,u.kitchen_id AS "kitchenId",u.student_code AS "studentCode",u.career,u.birth_date AS "birthDate",
     NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status='reservado' AND o.fulfillment_status='no_show') AS "bookingAllowed"
-    FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>$2`,
+    FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>$2 AND u.banned_at IS NULL`,
     [tokenHash(token), new Date().toISOString()],
   );
 

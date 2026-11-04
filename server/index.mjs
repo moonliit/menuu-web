@@ -49,6 +49,7 @@ import { expireUnpaidCheckouts, paymentProof, pendingPayments, reviewPayment, su
 import { adminReviews, markReviewPromptSeen, moderateReview, pendingReviewPrompt, recentKitchenReviews } from "./reviews.mjs";
 import { clearExpiredFridgePhotos, fridgeNotices, fridgePhoto, leaveOrderInFridge } from "./fridge.mjs";
 import { addPlaceholder, linkPlaceholder, placeholderKitchen, removePlaceholder } from "./placeholders.mjs";
+import { adminUserOrders, adminUsers, setUserBan } from "./users.mjs";
 
 const googleClientId =
   process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
@@ -491,6 +492,13 @@ async function handleApi(req, res, url) {
       return error(res, 403, "Acceso de admin requerido.");
     if (req.method === "GET" && url.pathname === "/api/admin/payments")
       return json(res, 200, { payments: await pendingPayments() });
+    if (req.method === "GET" && url.pathname === "/api/admin/users")
+      return json(res, 200, await adminUsers({ q: url.searchParams.get("q") || "", ...listPage(url) }));
+    const userOrdersMatch = /^\/api\/admin\/users\/([a-zA-Z0-9-]+)\/orders$/.exec(url.pathname);
+    if (req.method === "GET" && userOrdersMatch) {
+      const page = await adminUserOrders(userOrdersMatch[1], listPage(url, 10));
+      return json(res, 200, { ...page, orders: page.orders.map((order) => visibleOrder(order)) });
+    }
     if (req.method === "GET" && url.pathname === "/api/admin/reviews")
       return json(res, 200, await adminReviews({
         kitchen: url.searchParams.get("kitchen") || "all",
@@ -547,6 +555,9 @@ async function handleApi(req, res, url) {
       return json(res, 200, await leaveOrderInFridge(kitchenId, user.id, orderId, url.searchParams.get("phone"), bytes, mime));
     }
     const data = await body(req);
+    const userBanMatch = /^\/api\/admin\/users\/([a-zA-Z0-9-]+)\/ban$/.exec(url.pathname);
+    if (userBanMatch)
+      return json(res, 200, await setUserBan(user.id, userBanMatch[1], data?.action));
     const moderationMatch = /^\/api\/admin\/reviews\/([a-zA-Z0-9-]+)\/moderate$/.exec(url.pathname);
     if (moderationMatch)
       return json(res, 200, await moderateReview(moderationMatch[1], user.id, data?.action));
@@ -840,6 +851,8 @@ async function handleApi(req, res, url) {
 
     if (!user || !verifyPassword(password, user.passwordHash))
       return error(res, 401, "Correo o contraseña incorrectos.");
+    if (user.bannedAt)
+      return error(res, 403, "Esta cuenta está suspendida. Contacta a Menúu.");
 
     if (user.role !== role)
       return error(
@@ -895,6 +908,8 @@ async function handleApi(req, res, url) {
     if (!user) user = await findUserByEmail(email);
 
     if (user) {
+      if (user.bannedAt)
+        return error(res, 403, "Esta cuenta está suspendida. Contacta a Menúu.");
       if (user.role !== "consumer")
         return error(
           res,
