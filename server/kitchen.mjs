@@ -233,7 +233,7 @@ export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
       [kitchenId],
     ),
     db.query(
-      `SELECT id,dish_id AS "dishId",offer_date AS date,delivery_time AS "deliveryTime",pickup_until AS "pickupUntil",booking_deadline_at AS "bookingDeadline",capacity,reserved_count AS "reservedCount",description_override AS "descriptionOverride",price_override_cents AS "priceOverrideCents",customization_override AS "hasCustomizationOverride",published_at AS "publishedAt",sold_out_at AS "soldOutAt" FROM offers WHERE kitchen_id=$1 AND offer_date >= $2 AND offer_date < date($2, '+14 days') ORDER BY offer_date,delivery_time,id`,
+      `SELECT id,dish_id AS "dishId",offer_date AS date,delivery_time AS "deliveryTime",COALESCE(pickup_until_extended,pickup_until) AS "pickupUntil",booking_deadline_at AS "bookingDeadline",capacity,reserved_count AS "reservedCount",description_override AS "descriptionOverride",price_override_cents AS "priceOverrideCents",customization_override AS "hasCustomizationOverride",published_at AS "publishedAt",sold_out_at AS "soldOutAt" FROM offers WHERE kitchen_id=$1 AND offer_date >= $2 AND offer_date < date($2, '+14 days') ORDER BY offer_date,delivery_time,id`,
       [kitchenId, start],
     ),
     includeAnalytics ? db.query(
@@ -348,7 +348,7 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
   return transaction(async (db) => {
     const offer = (
       await db.query(
-        `SELECT o.id,o.kitchen_id AS "kitchenId",o.offer_date AS date,o.delivery_time AS "deliveryTime",o.pickup_until AS "pickupUntil",o.booking_deadline_at AS "bookingDeadline",o.capacity,o.reserved_count AS "reservedCount",d.name AS "dishName",d.image_url AS "imageUrl",COALESCE(o.price_override_cents,d.price_cents) AS "priceCents",k.name AS "kitchenName"
+        `SELECT o.id,o.kitchen_id AS "kitchenId",o.offer_date AS date,o.delivery_time AS "deliveryTime",COALESCE(o.pickup_until_extended,o.pickup_until) AS "pickupUntil",o.booking_deadline_at AS "bookingDeadline",o.capacity,o.reserved_count AS "reservedCount",d.name AS "dishName",d.image_url AS "imageUrl",COALESCE(o.price_override_cents,d.price_cents) AS "priceCents",k.name AS "kitchenName"
          FROM offers o JOIN dishes d ON d.kitchen_id=o.kitchen_id AND d.id=o.dish_id JOIN kitchens k ON k.id=o.kitchen_id
          WHERE o.id=$1 AND o.kitchen_id=$2`,
         [offerId, kitchenId],
@@ -877,6 +877,12 @@ export async function saveOffer(kitchenId, data) {
 
   if (endHour * 60 + endMinute - (startHour * 60 + startMinute) > 60)
     fail("La ventana de recojo puede durar como máximo 1 hora.");
+  const legacyEndMinutes = Math.min(
+    endHour * 60 + endMinute,
+    startHour * 60 + startMinute + 10,
+  );
+  const legacyPickupUntil = `${String(Math.floor(legacyEndMinutes / 60)).padStart(2, "0")}:${String(legacyEndMinutes % 60).padStart(2, "0")}`;
+  const extendedPickupUntil = data.pickupUntil === legacyPickupUntil ? null : data.pickupUntil;
   const deadline = new Date(data.bookingDeadline);
   const pickup = new Date(`${data.date}T${data.deliveryTime}:00-05:00`);
   const capacity = Number(data.capacity);
@@ -922,7 +928,7 @@ export async function saveOffer(kitchenId, data) {
 
       if (data.id) {
         const existing = await client.query(
-          `SELECT offer_date AS date,reserved_count AS reserved,dish_id AS "dishId",delivery_time AS "deliveryTime",pickup_until AS "pickupUntil" FROM offers WHERE kitchen_id=$1 AND id=$2`,
+          `SELECT offer_date AS date,reserved_count AS reserved,dish_id AS "dishId",delivery_time AS "deliveryTime",COALESCE(pickup_until_extended,pickup_until) AS "pickupUntil" FROM offers WHERE kitchen_id=$1 AND id=$2`,
           [kitchenId, id],
         );
 
@@ -947,36 +953,38 @@ export async function saveOffer(kitchenId, data) {
             "Este menú ya tiene reservas. Conserva su plato, día y ventana de recojo.",
           );
         await client.query(
-          `UPDATE offers SET dish_id=$3,offer_date=$4,delivery_time=$5,pickup_until=$6,booking_deadline_at=$7,capacity=$8,description_override=$9,price_override_cents=$10,customization_override=$11,sold_out_at=CASE WHEN reserved_count >= $8 THEN sold_out_at ELSE NULL END WHERE kitchen_id=$1 AND id=$2`,
+          `UPDATE offers SET dish_id=$3,offer_date=$4,delivery_time=$5,pickup_until=$6,booking_deadline_at=$7,capacity=$8,description_override=$9,price_override_cents=$10,customization_override=$11,pickup_until_extended=$12,sold_out_at=CASE WHEN reserved_count >= $8 THEN sold_out_at ELSE NULL END WHERE kitchen_id=$1 AND id=$2`,
           [
             kitchenId,
             id,
             data.dishId,
             data.date,
             data.deliveryTime,
-            data.pickupUntil,
+            legacyPickupUntil,
             deadline,
             capacity,
             description,
             priceCents,
             Boolean(groups),
+            extendedPickupUntil,
           ],
         );
       } else
         await client.query(
-          `INSERT INTO offers(id,kitchen_id,dish_id,offer_date,delivery_time,pickup_until,booking_deadline_at,capacity,description_override,price_override_cents,customization_override) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          `INSERT INTO offers(id,kitchen_id,dish_id,offer_date,delivery_time,pickup_until,booking_deadline_at,capacity,description_override,price_override_cents,customization_override,pickup_until_extended) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           [
             id,
             kitchenId,
             data.dishId,
             data.date,
             data.deliveryTime,
-            data.pickupUntil,
+            legacyPickupUntil,
             deadline,
             capacity,
             description,
             priceCents,
             Boolean(groups),
+            extendedPickupUntil,
           ],
         );
       await replaceOptions(client, "offer", kitchenId, id, groups || []);

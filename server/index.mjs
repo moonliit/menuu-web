@@ -1065,12 +1065,6 @@ export async function handleRequest(req, res, apiUrl) {
   } catch (cause) {
     console.error(cause);
 
-    if (apiUrl?.pathname === "/api/migration-diagnostic" && !res.headersSent)
-      return json(res, 500, {
-        code: cause.code || "UNKNOWN",
-        error: String(cause.message || "Unknown error").slice(0, 240),
-      });
-
     if (!res.headersSent)
       error(
         res,

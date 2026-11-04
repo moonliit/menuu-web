@@ -117,7 +117,7 @@ export async function getCatalog(now = new Date()) {
     ),
     getDb().query(
       `SELECT id, kitchen_id AS "kitchenId", dish_id AS "dishId", offer_date AS date,
-      delivery_time AS "deliveryTime", pickup_until AS "pickupUntil",
+      delivery_time AS "deliveryTime", COALESCE(pickup_until_extended,pickup_until) AS "pickupUntil",
       booking_deadline_at AS "bookingDeadline", booking_deadline_at > $2 AS "withinBookingWindow",
       capacity, reserved_count AS "reservedCount", sort_order AS "sortOrder",description_override AS "descriptionOverride",price_override_cents AS "priceOverrideCents",customization_override AS "customizationOverride"
       FROM offers WHERE offer_date >= $1 AND offer_date < date($1, '+14 days') ORDER BY offer_date, sort_order, id`,
@@ -577,7 +577,7 @@ export async function createBooking(userId, payload, requestKey = null) {
     const offersResult = await client.query(
       `SELECT id,kitchen_id AS "kitchenId",dish_id AS "dishId",
       offer_date AS date,delivery_time AS "deliveryTime",
-      pickup_until AS "pickupUntil",booking_deadline_at AS "bookingDeadline",
+      COALESCE(pickup_until_extended,pickup_until) AS "pickupUntil",booking_deadline_at AS "bookingDeadline",
       booking_deadline_at > $2 AS "withinBookingWindow",capacity,reserved_count AS "reservedCount",price_override_cents AS "priceOverrideCents",customization_override AS "customizationOverride"
       FROM offers WHERE id=ANY($1::text[]) ORDER BY id`,
       [ids, new Date().toISOString()],

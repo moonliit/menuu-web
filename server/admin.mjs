@@ -25,7 +25,7 @@ export async function adminData({
     getDb().query(
       `SELECT o.id,o.kitchen_id AS "kitchenId",k.name AS "kitchenName",k.logo_url AS "kitchenLogoUrl",
        o.dish_id AS "dishId",d.name AS "dishName",d.image_url AS "imageUrl",d.image_alt AS "imageAlt",
-       o.offer_date AS date,o.delivery_time AS "deliveryTime",o.pickup_until AS "pickupUntil",
+       o.offer_date AS date,o.delivery_time AS "deliveryTime",COALESCE(o.pickup_until_extended,o.pickup_until) AS "pickupUntil",
        o.booking_deadline_at AS "bookingDeadline",o.capacity,o.reserved_count AS "reservedCount",
        o.published_at AS "publishedAt"
        FROM offers o JOIN kitchens k ON k.id=o.kitchen_id
