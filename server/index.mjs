@@ -689,7 +689,6 @@ async function handleApi(req, res, url) {
       return error(res, 403, "Origen o token CSRF no permitido.");
     const user = await userFromSession(sessionToken(req));
     if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
-    const mimeType = String(req.headers["content-type"] || "").split(";")[0];
     const chunks = [];
     let size = 0;
     if (Buffer.isBuffer(req.body)) {
@@ -698,12 +697,12 @@ async function handleApi(req, res, url) {
     } else {
       for await (const chunk of req) {
         size += chunk.length;
-        if (size > 2_000_000) return error(res, 413, "La imagen supera 2 MB.");
+        if (size > 5_000_000) return error(res, 413, "La imagen supera 5 MB.");
         chunks.push(chunk);
       }
     }
-    if (size > 2_000_000) return error(res, 413, "La imagen supera 2 MB.");
-    return json(res, 200, await submitPaymentProof(user.id, proofMatch[1], Buffer.concat(chunks), mimeType));
+    if (size > 5_000_000) return error(res, 413, "La imagen supera 5 MB.");
+    return json(res, 200, await submitPaymentProof(user.id, proofMatch[1], Buffer.concat(chunks)));
   }
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {

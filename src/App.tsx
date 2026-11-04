@@ -3382,11 +3382,12 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const acceptedProof = (candidate: File) => /\.(png|jpe?g|webp|gif)$/i.test(candidate.name) || ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"].includes(candidate.type);
   function chooseFile(nextFile: File | null) {
     setError("");
-    if (nextFile && (nextFile.size > 2_000_000 || !["image/png", "image/jpeg"].includes(nextFile.type))) {
+    if (nextFile && (nextFile.size > 5_000_000 || !acceptedProof(nextFile))) {
       setFile(null);
-      setError("El comprobante debe ser PNG o JPG de hasta 2 MB.");
+      setError("El comprobante debe ser PNG, JPG, JPEG, WebP o GIF de hasta 5 MB.");
       return;
     }
     setFile(nextFile);
@@ -3398,12 +3399,12 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
     setBusy(true);
     setError("");
     try {
-      if (file.size > 2_000_000 || !["image/png", "image/jpeg"].includes(file.type))
-        throw new Error("El comprobante debe ser PNG o JPG de hasta 2 MB.");
+      if (file.size > 5_000_000 || !acceptedProof(file))
+        throw new Error("El comprobante debe ser PNG, JPG, JPEG, WebP o GIF de hasta 5 MB.");
       const csrf = document.cookie.split(";").map((part) => part.trim())
         .find((part) => part.startsWith("menuu_csrf="))?.slice("menuu_csrf=".length);
       const response = await fetch(`/api/payments/${order.paymentCheckoutId}/proof`, {
-        method: "POST", headers: { "Content-Type": file.type, ...(csrf ? { "X-CSRF-Token": csrf } : {}) }, body: file,
+        method: "POST", headers: { "Content-Type": file.type || "application/octet-stream", ...(csrf ? { "X-CSRF-Token": csrf } : {}) }, body: file,
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "No pudimos subir el comprobante.");
@@ -3420,12 +3421,12 @@ function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onU
       <div className="yape-step-list"><p>Abre Yape y usa una de estas opciones:</p><ol><li><strong>Escanear QR</strong><span>Apunta la cámara al código desde otro dispositivo.</span></li><li><strong>Subir una imagen con QR</strong><span>Descarga la foto y súbela en Yape desde este celular.</span></li></ol><p>Comprueba el destinatario y el monto antes de pagar.</p></div>
     </div>
     <div className="yape-upload-panel">
-      <div><strong>Sube tu comprobante</strong><span>PNG o JPG · máximo 2 MB</span></div>
+      <div><strong>Sube tu comprobante</strong><span>PNG, JPG, JPEG, WebP o GIF · máximo 5 MB</span></div>
       <label className={`yape-upload${file ? " yape-upload-selected" : ""}${dragging ? " is-dragging" : ""}`} {...dropProps}>
-        <input className="sr-only" type="file" accept="image/png,image/jpeg" onChange={(event) => {
+        <input className="sr-only" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" onChange={(event) => {
           const nextFile = event.target.files?.[0] || null;
           chooseFile(nextFile);
-          if (nextFile && (nextFile.size > 2_000_000 || !["image/png", "image/jpeg"].includes(nextFile.type))) event.target.value = "";
+          if (nextFile && (nextFile.size > 5_000_000 || !acceptedProof(nextFile))) event.target.value = "";
         }} />
         <ImagePlus size={20} aria-hidden="true" />
         <span>{file ? file.name : "Elegir foto del comprobante"}</span>
