@@ -14,6 +14,8 @@ import {
   ChevronRight,
   CircleAlert,
   Clock3,
+  Download,
+  ImagePlus,
   Minus,
   Plus,
   Search,
@@ -1596,6 +1598,7 @@ export default function App() {
   const [bookingError, setBookingError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [reviewPrompt, setReviewPrompt] = useState<ReviewableOrder | null>(null);
+  const [paymentPrompt, setPaymentPrompt] = useState<Order | null>(null);
   const [commentsKitchen, setCommentsKitchen] = useState<Kitchen | null>(null);
 
   async function refresh(force = true) {
@@ -2171,7 +2174,7 @@ export default function App() {
         );
         return;
       }
-      await api<{ orders: Order[] }>("/api/bookings", {
+      const created = await api<{ orders: Order[] }>("/api/bookings", {
         requestKey: bookingKeyRef.current,
         items: cartRows.map(({ item, offer }) => ({
           offeringId: item.offeringId,
@@ -2193,10 +2196,15 @@ export default function App() {
       invalidateCache("orders:");
       setOrdersLoaded(false);
       setOrdersPage(0);
-      await refreshCatalog(true, true);
       go("pedidos");
-      setNotice("Pedido apartado. Completa el pago con Yape.");
-      window.setTimeout(() => setNotice(""), 4000);
+      const payable = created.orders.find((order) => order.paymentStatus === "awaiting_proof");
+      if (payable) setPaymentPrompt({
+        ...payable,
+        paymentAmountSoles: created.orders
+          .filter((order) => order.paymentCheckoutId === payable.paymentCheckoutId)
+          .reduce((sum, order) => sum + order.totalSoles, 0),
+      });
+      refreshCatalog(true, true).catch(() => {});
     } catch (cause) {
       setBookingError(
         cause instanceof Error
@@ -2902,8 +2910,13 @@ export default function App() {
           <a href={routes.adminComentarios} aria-current={page === "adminComentarios" ? "page" : undefined} onClick={(event) => follow(event, "adminComentarios")}><span className="mobile-icon"><Star size={22} /></span><span>Comentarios</span></a>
         </nav>
       )}
-      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice || reviewPrompt || commentsKitchen)} />
-      {reviewPrompt && <ReviewPromptDialog review={reviewPrompt} onClose={() => setReviewPrompt(null)} onSaved={async () => {
+      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice || reviewPrompt || paymentPrompt || commentsKitchen)} />
+      {paymentPrompt && <PaymentPromptDialog order={paymentPrompt} onClose={() => setPaymentPrompt(null)} onUploaded={async () => {
+        setPaymentPrompt(null);
+        invalidateCache("orders:");
+        await loadOrders(0, true);
+      }} />}
+      {reviewPrompt && !paymentPrompt && <ReviewPromptDialog review={reviewPrompt} onClose={() => setReviewPrompt(null)} onSaved={async () => {
         setReviewPrompt(null);
         invalidateCache("orders:");
         try {
@@ -3352,11 +3365,32 @@ function KitchenCommentsDialog({ kitchen, onClose }: { kitchen: Kitchen; onClose
   </dialog>, document.body);
 }
 
-function PaymentInstructions({ order, onUploaded }: { order: Order; onUploaded: () => Promise<void> }) {
+function PaymentPromptDialog({ order, onClose, onUploaded }: { order: Order; onClose: () => void; onUploaded: () => Promise<void> }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (!ref.current?.open) ref.current?.showModal(); }, []);
+  return createPortal(<dialog ref={ref} className="yape-payment-dialog" aria-labelledby="yape-payment-title" onClose={onClose}>
+    <div className="yape-payment-scroll dialog-scroll">
+      <button type="button" className="icon-button yape-payment-close" onClick={() => ref.current?.close()} aria-label="Cerrar pago"><X size={20} /></button>
+      <span className="eyebrow">RESERVA CREADA</span>
+      <PaymentInstructions order={order} onUploaded={onUploaded} titleId="yape-payment-title" />
+    </div>
+  </dialog>, document.body);
+}
+
+function PaymentInstructions({ order, onUploaded, titleId }: { order: Order; onUploaded: () => Promise<void>; titleId?: string }) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   if (!order.paymentCheckoutId || order.paymentStatus !== "awaiting_proof") return null;
+  function chooseFile(nextFile: File | null) {
+    setError("");
+    if (nextFile && (nextFile.size > 2_000_000 || !["image/png", "image/jpeg"].includes(nextFile.type))) {
+      setFile(null);
+      setError("El comprobante debe ser PNG o JPG de hasta 2 MB.");
+      return;
+    }
+    setFile(nextFile);
+  }
   async function upload() {
     if (!file || !order.paymentCheckoutId) return;
     setBusy(true);
@@ -3376,16 +3410,27 @@ function PaymentInstructions({ order, onUploaded }: { order: Order; onUploaded: 
       setError(cause instanceof Error ? cause.message : "No pudimos subir el comprobante.");
     } finally { setBusy(false); }
   }
-  return <section className="yape-payment" aria-label="Pago anticipado con Yape">
-    <h3>Completa tu pago con Yape</h3>
-    <p>Yapea <strong>{money(order.paymentAmountSoles ?? order.totalSoles)}</strong> a Fernando Wilder Altamirano Pinedo y sube el comprobante antes de {order.paymentExpiresAt ? new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", hour: "numeric", minute: "2-digit" }).format(new Date(order.paymentExpiresAt)).replace(/([ap])\.\s*m\./gi, "$1.m.") : "que termine el plazo"}.</p>
-    <img className="yape-qr" src="/images/yape-fernando.jpeg" alt="QR de Yape de Fernando Wilder Altamirano Pinedo" />
-    <a className="yape-download" href="/images/yape-fernando.jpeg" download="menuu-yape-fernando.jpeg">Descargar QR</a>
-    <p>Elige una forma de usar el QR en Yape:</p>
-    <ol><li><strong>Escanear QR:</strong> apunta tu cámara al código si usas otro dispositivo.</li><li><strong>Subir una imagen con QR:</strong> descarga la foto y súbela en Yape si pagas desde este celular.</li></ol>
-    <p>Confirma el destinatario y el monto en Yape. Luego sube aquí una imagen del comprobante del pago realizado.</p>
-    <label className="yape-upload">Comprobante de Yape (PNG o JPG, hasta 2 MB)<input type="file" accept="image/png,image/jpeg" onChange={(event) => setFile(event.target.files?.[0] || null)} /></label>
-    <Button onClick={upload} disabled={!file || busy}>{busy ? "Subiendo…" : "Enviar comprobante"}</Button>
+  return <section className={`yape-payment${titleId ? " yape-payment-in-dialog" : ""}`} aria-label="Pago anticipado con Yape">
+    <h3 id={titleId}>Completa tu pago con Yape</h3>
+    <p className="yape-payment-intro">Yapea <strong>{money(order.paymentAmountSoles ?? order.totalSoles)}</strong> a Fernando Wilder Altamirano Pinedo. Sube el comprobante antes de {order.paymentExpiresAt ? new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", hour: "numeric", minute: "2-digit" }).format(new Date(order.paymentExpiresAt)).replace(/([ap])\.\s*m\./gi, "$1.m.") : "que termine el plazo"}.</p>
+    <div className="yape-payment-steps">
+      <div className="yape-qr-panel"><img className="yape-qr" src="/images/yape-fernando.jpeg" alt="QR de Yape de Fernando Wilder Altamirano Pinedo" /><a className="yape-download" href="/images/yape-fernando.jpeg" download="menuu-yape-fernando.jpeg"><Download size={17} aria-hidden="true" /> Descargar QR</a></div>
+      <div className="yape-step-list"><p>Abre Yape y usa una de estas opciones:</p><ol><li><strong>Escanear QR</strong><span>Apunta la cámara al código desde otro dispositivo.</span></li><li><strong>Subir una imagen con QR</strong><span>Descarga la foto y súbela en Yape desde este celular.</span></li></ol><p>Comprueba el destinatario y el monto antes de pagar.</p></div>
+    </div>
+    <div className="yape-upload-panel">
+      <div><strong>Sube tu comprobante</strong><span>PNG o JPG · máximo 2 MB</span></div>
+      <label className={`yape-upload${file ? " yape-upload-selected" : ""}`}>
+        <input className="sr-only" type="file" accept="image/png,image/jpeg" onChange={(event) => {
+          const nextFile = event.target.files?.[0] || null;
+          chooseFile(nextFile);
+          if (nextFile && (nextFile.size > 2_000_000 || !["image/png", "image/jpeg"].includes(nextFile.type))) event.target.value = "";
+        }} />
+        <ImagePlus size={20} aria-hidden="true" />
+        <span>{file ? file.name : "Elegir foto del comprobante"}</span>
+        {file && <small>Cambiar</small>}
+      </label>
+      <Button onClick={upload} disabled={!file || busy}>{busy ? "Subiendo…" : "Enviar comprobante"}</Button>
+    </div>
     {error && <p className="form-error" role="alert">{error}</p>}
   </section>;
 }

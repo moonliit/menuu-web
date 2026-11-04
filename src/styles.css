@@ -4274,14 +4274,47 @@ p {
   }
 }
 /* Pago anticipado en Pedidos. */
-.yape-payment { display: grid; gap: 14px; padding: 20px; margin: 16px 0; border: 1px solid var(--color-border); border-radius: 20px; background: #fff; }
-.yape-payment h3 { margin: 0; color: var(--color-brand); font: 500 24px/1.2 var(--font-display); }
+.yape-payment-dialog { width: min(760px, calc(100% - 32px)); max-height: min(88dvh, 820px); margin: auto; padding: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: 22px; background: var(--color-surface); color: var(--color-text); box-shadow: 0 24px 70px rgb(7 83 56 / 20%); }
+.yape-payment-dialog::backdrop { background: rgb(11 35 24 / 56%); }
+.yape-payment-scroll { max-height: min(calc(88dvh - 2px), 818px); overflow-y: auto; padding: 28px; border-radius: 21px; }
+.yape-payment-close { float: right; }
+.yape-payment { display: grid; gap: 18px; padding: 20px; margin: 16px 0; border: 1px solid var(--color-border); border-radius: 20px; background: #fff; }
+.yape-payment-in-dialog { padding: 0; margin: 8px 0 0; border: 0; border-radius: 0; }
+.yape-payment h3 { margin: 0; color: var(--color-brand); font: 500 27px/1.2 var(--font-display); }
 .yape-payment p, .yape-payment ol { margin: 0; }
-.yape-payment ol { padding-left: 22px; }
-.yape-payment li + li { margin-top: 8px; }
-.yape-qr { display: block; width: min(100%, 300px); height: auto; justify-self: center; border-radius: 16px; }
-.yape-download { justify-self: center; min-height: 44px; display: inline-flex; align-items: center; color: var(--color-brand); font-weight: 600; text-decoration: underline; }
-.yape-upload { display: grid; gap: 8px; font-weight: 600; color: var(--color-brand); }
-.yape-upload input { width: 100%; font: inherit; }
+.yape-payment-intro { line-height: 1.5; }
+.yape-payment-steps { display: grid; grid-template-columns: minmax(180px, 250px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.yape-qr-panel { display: grid; justify-items: center; gap: 4px; padding: 12px; border-radius: 18px; background: var(--color-background); }
+.yape-qr { display: block; width: 100%; max-width: 230px; height: auto; border-radius: 12px; }
+.yape-download { min-height: 44px; display: inline-flex; align-items: center; gap: 7px; color: var(--color-brand); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.yape-step-list { display: grid; gap: 12px; line-height: 1.45; }
+.yape-step-list ol { padding: 0; list-style: none; counter-reset: yape-step; }
+.yape-step-list li { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: 9px; counter-increment: yape-step; }
+.yape-step-list li::before { content: counter(yape-step); grid-row: 1 / 3; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--color-orange-soft); color: var(--color-brand); font-weight: 700; }
+.yape-step-list li + li { margin-top: 13px; }
+.yape-step-list li span { color: var(--color-muted); font-size: 14px; }
+.yape-upload-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 16px; border: 1px solid var(--color-border); border-radius: 16px; background: var(--color-background); }
+.yape-upload-panel > div { display: grid; gap: 2px; }
+.yape-upload-panel > div > strong { color: var(--color-brand); }
+.yape-upload-panel > div > span { color: var(--color-muted); font-size: 13px; }
+.yape-upload { grid-column: 1; display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 48px; padding: 9px 13px; border: 1px dashed var(--color-brand); border-radius: 12px; background: #fff; color: var(--color-brand); font-weight: 600; cursor: pointer; transition: background 200ms, border-color 200ms; }
+.yape-upload:hover, .yape-upload:focus-within { background: #eef6ec; }
+.yape-upload:focus-within { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+.yape-upload-selected { border-style: solid; }
+.yape-upload > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.yape-upload > small { margin-left: auto; font-size: 13px; text-decoration: underline; }
+.yape-upload-panel .button { grid-column: 2; grid-row: 1 / 3; min-height: 48px; }
+@media (max-width: 700px) {
+  .yape-payment-dialog { position: fixed; inset: auto 0 0; width: 100%; max-width: none; max-height: calc(100dvh - 16px); margin: 0; border-radius: 24px 24px 0 0; }
+  .yape-payment-scroll { max-height: calc(100dvh - 18px); padding: 20px 18px calc(20px + env(safe-area-inset-bottom)); border-radius: 23px 23px 0 0; }
+  .yape-payment { padding: 16px; }
+  .yape-payment-in-dialog { padding: 0; }
+  .yape-payment h3 { font-size: 25px; }
+  .yape-payment-steps { grid-template-columns: 1fr; gap: 15px; }
+  .yape-qr-panel { padding: 10px; }
+  .yape-qr { max-width: 210px; }
+  .yape-upload-panel { grid-template-columns: 1fr; }
+  .yape-upload, .yape-upload-panel .button { grid-column: 1; grid-row: auto; width: 100%; }
+}
 .yape-status { margin: 10px 0; color: var(--color-brand); font-weight: 600; }
 .yape-cancel-note { margin: 8px 0; color: var(--color-muted); font-size: 14px; }
