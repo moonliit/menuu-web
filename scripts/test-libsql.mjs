@@ -1447,8 +1447,20 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     });
     const prepaid = (await createBooking(consumers[0].id,
       [{ offeringId: extraOffer, quantity: 1, choices: {} }], "extra-prepaid-test"))[0];
-    await submitPaymentProof(consumers[0].id, prepaid.paymentCheckoutId,
-      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG1sAAAAASUVORK5CYII=", "base64"), "image/png");
+    const proofToken = randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", "");
+    await insertSession(proofToken, consumers[0].id);
+    const proofServer = createServer(handleRequest);
+    await new Promise((resolve) => proofServer.listen(0, "127.0.0.1", resolve));
+    try {
+      const proofUpload = await fetch(`http://127.0.0.1:${proofServer.address().port}/api/payments/${prepaid.paymentCheckoutId}/proof`, {
+        method: "POST",
+        headers: { Cookie: `menuu_session=${proofToken}; menuu_csrf=test-csrf`, "X-CSRF-Token": "test-csrf", "Content-Type": "image/png" },
+        body: Buffer.from("comprobante para revision manual"),
+      });
+      assert.equal(proofUpload.status, 200, JSON.stringify(await proofUpload.json()));
+    } finally {
+      await new Promise((resolve) => proofServer.close(resolve));
+    }
     await reviewPayment(prepaid.paymentCheckoutId, "payment-reviewer", "approved");
     const prepaidItem = (await db.query("SELECT id FROM order_items WHERE order_id=$1", [prepaid.id])).rows[0];
     const extraSale = await addExtraPortion("test-kitchen", "kitchen-actor", {

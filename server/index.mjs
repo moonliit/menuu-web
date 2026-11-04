@@ -661,7 +661,6 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/reviews/pending") {
     const user = await userFromSession(sessionToken(req));
     if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
-    const declaredMime = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
     return json(res, 200, { review: await pendingReviewPrompt(user.id) });
   }
 
@@ -690,6 +689,7 @@ async function handleApi(req, res, url) {
       return error(res, 403, "Origen o token CSRF no permitido.");
     const user = await userFromSession(sessionToken(req));
     if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+    const declaredMime = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
     const chunks = [];
     let size = 0;
     if (Buffer.isBuffer(req.body)) {
