@@ -3342,9 +3342,13 @@ export function AdminDashboard({
   const [error, setError] = useState("");
   const [week, setWeek] = useState(0);
   const [kitchen, setKitchen] = useState("all");
+  const [day, setDay] = useState(() => {
+    const today = todayLima();
+    return new Date(`${today}T12:00:00Z`).getUTCDay() === 0 ? "all" : today;
+  });
   const [adminPage, setAdminPage] = useState(0);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const adminQuery = `/api/admin/data?week=${week}&kitchen=${encodeURIComponent(kitchen)}&limit=10&offset=${adminPage * 10}`;
+  const adminQuery = `/api/admin/data?week=${week}&kitchen=${encodeURIComponent(kitchen)}&day=${day}&limit=10&offset=${adminPage * 10}`;
   const refresh = async (force = true) => {
     if (force) invalidateCache("admin:data:");
     const [next, paymentResult] = await Promise.all([
@@ -3364,7 +3368,7 @@ export function AdminDashboard({
           : "No pudimos cargar los pedidos.",
       ),
     );
-  }, [user.id, week, kitchen, adminPage]);
+  }, [user.id, week, kitchen, day, adminPage]);
   useEffect(() => {
     const update = () => {
       if (!document.hidden)
@@ -3384,6 +3388,10 @@ export function AdminDashboard({
   const kitchens = data?.kitchens || [];
   const start = data ? weekDate(data.weekStart, week * 7) : "";
   const end = data ? weekDate(data.weekStart, week * 7 + 5) : "";
+  const dayOptions = [{ value: "all", label: "Ver todo" }, ...Array.from({ length: 6 }, (_, index) => {
+    const date = weekDate(data?.weekStart || todayLima(), week * 7 + index);
+    return { value: date, label: dateLabel(date, { weekday: "short", day: "numeric", month: "short" }) };
+  })];
   const visible = data?.offers || [];
   return (
     <section
@@ -3420,6 +3428,8 @@ export function AdminDashboard({
                   className={week === 0 ? "active" : ""}
                   onClick={() => {
                     setWeek(0);
+                    const today = todayLima();
+                    setDay(new Date(`${today}T12:00:00Z`).getUTCDay() === 0 ? "all" : today);
                     setAdminPage(0);
                     setExpanded(null);
                   }}
@@ -3431,6 +3441,7 @@ export function AdminDashboard({
                   className={week === 1 ? "active" : ""}
                   onClick={() => {
                     setWeek(1);
+                    setDay("all");
                     setAdminPage(0);
                     setExpanded(null);
                   }}
@@ -3443,24 +3454,8 @@ export function AdminDashboard({
                 {dateLabel(end, { day: "numeric", month: "short" })}
               </span>
             </div>
-            <label className="admin-kitchen-filter">
-              Cocina
-              <select
-                value={kitchen}
-                onChange={(event) => {
-                  setKitchen(event.target.value);
-                  setAdminPage(0);
-                  setExpanded(null);
-                }}
-              >
-                <option value="all">Todas las cocinas</option>
-                {kitchens.map(({ id, name }) => (
-                  <option value={id} key={id}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <KitchenSelect id="admin-order-day" label="Día" value={day} options={dayOptions} onChange={(value) => { setDay(value); setAdminPage(0); setExpanded(null); }} />
+            <KitchenSelect id="admin-order-kitchen" label="Cocina" value={kitchen} options={[{ value: "all", label: "Todas las cocinas" }, ...kitchens.map(({ id, name }) => ({ value: id, label: name }))]} onChange={(value) => { setKitchen(value); setAdminPage(0); setExpanded(null); }} />
             <Button
               type="button"
               variant="secondary"
@@ -3512,7 +3507,7 @@ export function AdminDashboard({
             ))
           ) : (
             <p className="km-empty">
-              No hay menús de esta cocina en la semana seleccionada.
+              No hay menús para los filtros seleccionados.
             </p>
           )}
           {data.totalOffers > 10 && (

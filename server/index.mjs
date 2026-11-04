@@ -460,17 +460,19 @@ async function handleApi(req, res, url) {
       const weekValue = url.searchParams.get("week");
       const week = weekValue === null ? null : Number(weekValue);
       const kitchen = url.searchParams.get("kitchen") || "all";
+      const day = url.searchParams.get("day") || "all";
 
       if (
         (week !== null && ![0, 1].includes(week)) ||
-        (kitchen !== "all" && !/^[a-zA-Z0-9-]{1,100}$/.test(kitchen))
+        (kitchen !== "all" && !/^[a-zA-Z0-9-]{1,100}$/.test(kitchen)) ||
+        (day !== "all" && !/^\d{4}-\d{2}-\d{2}$/.test(day))
       )
         return error(res, 400, "Filtros inválidos.");
 
       return json(
         res,
         200,
-        await adminData({ week, kitchen, ...listPage(url) }),
+        await adminData({ week, kitchen, day, ...listPage(url) }),
       );
     }
     const candidatesMatch =

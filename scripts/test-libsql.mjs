@@ -733,6 +733,12 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       assert.equal(adminPage.offers.length, 1);
       assert.ok(adminPage.totalOffers >= 2);
       assert.equal(adminPage.kitchens.length, 2);
+      const adminDayResponse = await fetch(`${base}/api/admin/data?week=1&day=${offerDate}`, { headers: { Cookie: adminCookie } });
+      const adminDay = await adminDayResponse.json();
+      assert.equal(adminDayResponse.status, 200);
+      assert.ok(adminDay.totalOffers >= 2);
+      assert.ok(adminDay.offers.every((item) => item.date === offerDate));
+      assert.equal((await fetch(`${base}/api/admin/data?week=0&day=${offerDate}`, { headers: { Cookie: adminCookie } })).status, 400);
       assert.equal(
         (await kitchenData("test-kitchen")).offers.some(
           (item) => item.id === secondOffer,

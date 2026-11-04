@@ -86,10 +86,12 @@
   align-items: end;
   flex-wrap: wrap;
   gap: 14px;
+  margin-top: 28px;
 }
 .admin-controls .km-week-controls {
   flex: 1 1 370px;
 }
+.admin-controls .km-select { flex: 0 1 210px; min-width: 190px; }
 .admin-kitchen-filter {
   display: grid;
   gap: 5px;
@@ -210,6 +212,7 @@
   .admin-controls .km-week-controls {
     flex-basis: 100%;
   }
+  .admin-controls .km-select { flex: 1 1 180px; min-width: 0; }
   .admin-kitchen-filter {
     flex: 1 1 190px;
   }

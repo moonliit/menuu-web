@@ -9,6 +9,7 @@ const fail = (message, status = 400) => {
 export async function adminData({
   week = null,
   kitchen = "all",
+  day = "all",
   limit = 20,
   offset = 0,
 } = {}) {
@@ -20,7 +21,10 @@ export async function adminData({
           .toISOString()
           .slice(0, 10);
   const days = week === null ? 14 : 7;
-  const filter = `o.offer_date >= $1 AND o.offer_date < date($1, '+${days} days') AND ($2='all' OR o.kitchen_id=$2)`;
+  const until = new Date(Date.parse(`${from}T12:00:00Z`) + days * 86400_000).toISOString().slice(0, 10);
+  if (day !== "all" && (day < from || day >= until || new Date(`${day}T12:00:00Z`).getUTCDay() === 0))
+    fail("Día fuera de la semana seleccionada.");
+  const filter = `o.offer_date >= $1 AND o.offer_date < date($1, '+${days} days') AND ($2='all' OR o.kitchen_id=$2) AND ($3='all' OR o.offer_date=$3)`;
   const [offers, count, kitchens] = await Promise.all([
     getDb().query(
       `SELECT o.id,o.kitchen_id AS "kitchenId",k.name AS "kitchenName",k.logo_url AS "kitchenLogoUrl",
@@ -31,12 +35,13 @@ export async function adminData({
        FROM offers o JOIN kitchens k ON k.id=o.kitchen_id
        JOIN dishes d ON d.kitchen_id=o.kitchen_id AND d.id=o.dish_id
        WHERE ${filter}
-       ORDER BY o.offer_date,o.delivery_time,k.name,d.name,o.id LIMIT $3 OFFSET $4`,
-      [from, kitchen, limit, offset],
+       ORDER BY o.offer_date,o.delivery_time,k.name,d.name,o.id LIMIT $4 OFFSET $5`,
+      [from, kitchen, day, limit, offset],
     ),
     getDb().query(`SELECT count(*) AS total FROM offers o WHERE ${filter}`, [
       from,
       kitchen,
+      day,
     ]),
     getDb().query(
       `SELECT DISTINCT k.id,k.name FROM kitchens k JOIN offers o ON o.kitchen_id=k.id
