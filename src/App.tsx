@@ -2554,9 +2554,11 @@ export default function App() {
                   <p>{activeKitchen ? activeKitchen.description : "Revisa los días y la hora de recojo de cada cocina."}</p>
                 </div>
                 {activeKitchen && <div className="kitchen-menu-reputation">
-                  <div className="kitchen-menu-rating"><Star size={21} fill={activeKitchen.rating === null ? "none" : "currentColor"} aria-hidden="true" /><strong>{activeKitchen.rating === null ? "Aún sin puntuación" : `${activeKitchen.rating.toFixed(1)} / 5`}</strong></div>
-                  <span>{activeKitchen.ratingCount} {activeKitchen.ratingCount === 1 ? "persona calificó" : "personas calificaron"}</span>
-                  <Button type="button" variant="secondary" onClick={() => setCommentsKitchen(activeKitchen)}>Ver últimos comentarios</Button>
+                  <div className={`kitchen-menu-rating${activeKitchen.rating === null ? " kitchen-menu-rating-empty" : ""}`}><Star size={30} fill={activeKitchen.rating === null ? "none" : "currentColor"} aria-hidden="true" /><strong>{activeKitchen.rating === null ? "Aún sin puntuación" : `${activeKitchen.rating.toFixed(1)} / 5`}</strong></div>
+                  <div className="kitchen-menu-reputation-detail">
+                    <span>{activeKitchen.ratingCount} {activeKitchen.ratingCount === 1 ? "persona calificó" : "personas calificaron"} ·</span>
+                    <button type="button" className="section-link kitchen-comments-link" onClick={() => setCommentsKitchen(activeKitchen)} aria-label="Ver las últimas cinco reseñas">Ver reseñas <ArrowRight size={18} aria-hidden="true" /></button>
+                  </div>
                 </div>}
               </div>
               {kitchenFilter && !activeKitchen ? (
@@ -3410,21 +3412,40 @@ function OrderCard({
     order.status === "entregado"
       ? "Entregado"
       : order.status === "no_se_presento"
-        ? "No se registró recojo"
+        ? "No recogido"
         : order.status === "entrega_pendiente"
-          ? "Entrega por confirmar"
+          ? "Entrega pendiente"
           : order.status === "cancelado"
             ? "Cancelado"
             : order.paymentStatus === "awaiting_proof" ? "Falta comprobante"
             : order.paymentStatus === "under_review" ? "Pago en revisión"
+            : order.paymentStatus === "rejected" ? "Pago rechazado"
+            : order.paymentStatus === "expired" ? "Pago vencido"
+            : order.paymentStatus === "approved" ? "Pago aprobado"
             : "Reservado";
-  const settled = order.status !== "reservado";
+  const statusTone = order.status === "entregado" ? "delivered"
+    : order.status === "cancelado" ? "canceled"
+    : order.status === "no_se_presento" || order.paymentStatus === "rejected" || order.paymentStatus === "expired" ? "danger"
+    : order.status === "entrega_pendiente" || order.paymentStatus === "awaiting_proof" || order.paymentStatus === "under_review" ? "warning"
+    : "reserved";
   const canCancel = order.status === "reservado" && !afterDelivery && !order.paymentCheckoutId;
+  const canPay = showPayment && order.status === "reservado" && order.paymentStatus === "awaiting_proof";
   const firstItem = order.items[0];
   const otherItems = order.items.length - 1;
   const paymentLabel = order.paymentCheckoutId
     ? `Yape · ${order.paymentStatus === "approved" ? "aprobado" : order.paymentStatus === "under_review" ? "en revisión" : order.paymentStatus === "awaiting_proof" ? "falta comprobante" : order.paymentStatus === "expired" ? "plazo vencido" : "rechazado"}`
     : order.payment;
+  const statusInfo = order.paymentStatus === "expired"
+    ? "Terminó el plazo para subir el comprobante y se liberó el cupo. Si ya yapeaste, contacta a Menúu."
+    : order.paymentStatus === "rejected"
+      ? `El comprobante fue rechazado${order.paymentReviewNote ? `: ${order.paymentReviewNote}` : ""}. Si ya yapeaste, contacta a Menúu.`
+      : order.status === "cancelado"
+        ? "Esta reserva fue cancelada."
+        : order.status === "no_se_presento"
+          ? "No se registró el recojo dentro de los 15 minutos posteriores a la hora prevista."
+          : order.paymentStatus === "under_review"
+            ? "Recibimos tu comprobante. Confirmaremos tu reserva al verificar el Yape."
+            : null;
   async function cancelReservation() {
     setCancelBusy(true);
     setError("");
@@ -3444,34 +3465,24 @@ function OrderCard({
   }
   return (
     <article className="order-card">
-      <div className="order-overview">
-        {firstItem && <img className="order-thumbnail" src={firstItem.imageUrl || "/images/menuu-logo.png"} alt="" loading="lazy" />}
-        <div className="order-overview-content">
-          <div className="order-head">
-            <div>
-              <span className="eyebrow">RESERVA {order.code}</span>
-              <h2>{order.kitchenName}</h2>
-            </div>
-            <span className={`order-status ${settled ? "order-status-ended" : ""}`}>
-              {settled ? <Clock3 size={16} /> : <Check size={16} />}
-              {label}
-            </span>
-          </div>
-          <p className="order-dish-preview">
-            {firstItem ? `${firstItem.quantity} × ${firstItem.name}` : "Pedido"}
-            {otherItems > 0 && <span> + {otherItems} {otherItems === 1 ? "plato" : "platos"} más</span>}
-          </p>
-          <div className="order-highlights">
-            <span className="order-pickup"><BrandCalendarIcon size={18} aria-hidden="true" /> Recojo: {dateLabel(order.date)} · {pickupWindow(order.deliveryTime, order.pickupUntil)}</span>
-            <strong>{money(order.totalSoles)}</strong>
-          </div>
-        </div>
-      </div>
-      <div className="order-card-bottom">
-        <span>{paymentLabel}</span>
-        <details className="order-details">
-          <summary>Ver detalle <ChevronDown size={17} aria-hidden="true" /></summary>
-          <div className="order-details-content">
+      <details className="order-details">
+        <summary className="order-overview">
+          <img className="order-thumbnail" src={firstItem?.imageUrl || "/images/menuu-logo.png"} alt="" loading="lazy" />
+          <span className="order-overview-content">
+            <strong className="order-kitchen">{order.kitchenName}</strong>
+            <span className="order-dish-preview">{firstItem ? `${firstItem.quantity} × ${firstItem.name}` : "Pedido"}{otherItems > 0 && <span> · +{otherItems} {otherItems === 1 ? "plato" : "platos"}</span>}</span>
+          </span>
+          <span className="order-pickup"><BrandCalendarIcon size={18} aria-hidden="true" /><span>Recojo: {dateLabel(order.date)} · {pickupWindow(order.deliveryTime, order.pickupUntil)}</span></span>
+          <strong className="order-total">{money(order.totalSoles)}</strong>
+          <span className={`order-status order-status-${statusTone}`}>
+            {statusTone === "danger" ? null : statusTone === "reserved" || statusTone === "delivered" ? <Check size={15} aria-hidden="true" /> : <Clock3 size={15} aria-hidden="true" />}
+            {label}
+            {statusInfo && <span className="order-status-info" role="img" aria-label={statusInfo} data-tooltip={statusInfo}><CircleAlert size={15} aria-hidden="true" /></span>}
+          </span>
+          <span className="order-expand">{canPay ? "Pagar" : canReview ? "Calificar" : "Detalle"} <ChevronDown size={17} aria-hidden="true" /></span>
+        </summary>
+        <div className="order-details-content">
+            <div className="order-details-meta"><span>Reserva {order.code}</span><span>Pago: {paymentLabel}</span></div>
             <div className="order-items">
               {order.items.map((item) => (
                 <div key={item.id}>
@@ -3486,9 +3497,9 @@ function OrderCard({
             </div>
             {order.paymentStatus === "approved" && order.status === "reservado" && <p className="yape-cancel-note">Si necesitas cancelar este pedido pagado, contacta a Menúu para coordinar la devolución.</p>}
             {order.status === "entrega_pendiente" && <p className="review-note">Tu solicitud está registrada. La entrega aún no ha sido confirmada.</p>}
-            {order.status === "no_se_presento" && <p className="review-note">No se registró el recojo dentro de los 15 minutos posteriores a la hora prevista.</p>}
             {order.status === "entregado" && !order.reviewEnabled && order.kitchenRating === null && <p className="review-note">La reseña todavía no está habilitada para este pedido.</p>}
             {order.kitchenRating !== null && <p className="review-note">Calificaste la comida de {order.kitchenName}.{order.kitchenComment && <> “{order.kitchenComment}”</>}</p>}
+            {statusInfo && <p className={`order-attention ${statusTone === "danger" ? "order-attention-error" : ""}`}>{statusInfo}</p>}
             {canCancel && (
               <div className="order-cancel">
                 {cancelOpen ? (
@@ -3503,20 +3514,10 @@ function OrderCard({
                 {error && <p className="form-error" role="alert">{error}</p>}
               </div>
             )}
-          </div>
-        </details>
-      </div>
-      {showPayment && order.paymentStatus === "awaiting_proof" && <details className="order-action-panel">
-        <summary>Completar pago con Yape <ChevronDown size={17} aria-hidden="true" /></summary>
-        <PaymentInstructions order={order} onUploaded={onReviewed} />
-      </details>}
-      {showPayment && order.paymentStatus === "under_review" && <p className="order-attention" role="status">Recibimos tu comprobante. Confirmaremos tu reserva al verificar el Yape.</p>}
-      {showPayment && order.paymentStatus === "rejected" && <p className="order-attention order-attention-error" role="alert">Comprobante rechazado: {order.paymentReviewNote}. Si ya yapeaste, contacta a Menúu.</p>}
-      {showPayment && order.paymentStatus === "expired" && <p className="order-attention order-attention-error" role="status">Terminó el plazo para subir el comprobante y se liberó el cupo. Si ya yapeaste, contacta a Menúu.</p>}
-      {canReview && <details className="order-action-panel">
-        <summary>Calificar mi comida <ChevronDown size={17} aria-hidden="true" /></summary>
-        <KitchenReviewForm review={{ orderId: order.id, kitchenName: order.kitchenName, code: order.code, items: order.items }} onSaved={onReviewed} />
-      </details>}
+            {canPay && <PaymentInstructions order={order} onUploaded={onReviewed} />}
+            {canReview && <KitchenReviewForm review={{ orderId: order.id, kitchenName: order.kitchenName, code: order.code, items: order.items }} onSaved={onReviewed} />}
+        </div>
+      </details>
     </article>
   );
 }
