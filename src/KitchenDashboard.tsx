@@ -211,6 +211,12 @@ const localDateTime = (value: string) => {
 };
 const isoFromLocal = (value: string) =>
   new Date(`${value}:00-05:00`).toISOString();
+const pickupTimeAfter = (start: string, minutes: number) => {
+  const [hour, minute] = start.split(":").map(Number);
+  const total = Math.min(hour * 60 + minute + minutes, 23 * 60 + 59);
+
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+};
 const blankDish = (): Dish => ({
   id: "",
   name: "",
@@ -244,7 +250,7 @@ const blankOffer = (dishId = ""): Offer => {
     dishId,
     date,
     deliveryTime: "13:00",
-    pickupUntil: "13:10",
+    pickupUntil: "14:00",
     bookingDeadline: `${date}T12:59`,
     capacity: 10,
     reservedCount: 0,
@@ -2924,6 +2930,8 @@ export default function KitchenDashboard({
                       <input
                         type="time"
                         required
+                        min={pickupTimeAfter(offer.deliveryTime, 1)}
+                        max={pickupTimeAfter(offer.deliveryTime, 60)}
                         value={offer.pickupUntil}
                         onChange={(event) =>
                           setOffer({
@@ -2932,6 +2940,7 @@ export default function KitchenDashboard({
                           })
                         }
                       />
+                      <small>Máximo 1 hora después del inicio.</small>
                     </label>
                     <label>
                       Cierre de reserva

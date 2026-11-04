@@ -875,8 +875,8 @@ export async function saveOffer(kitchenId, data) {
   const [startHour, startMinute] = data.deliveryTime.split(":").map(Number);
   const [endHour, endMinute] = data.pickupUntil.split(":").map(Number);
 
-  if (endHour * 60 + endMinute - (startHour * 60 + startMinute) > 10)
-    fail("La ventana de recojo puede durar como máximo 10 minutos.");
+  if (endHour * 60 + endMinute - (startHour * 60 + startMinute) > 60)
+    fail("La ventana de recojo puede durar como máximo 1 hora.");
   const deadline = new Date(data.bookingDeadline);
   const pickup = new Date(`${data.date}T${data.deliveryTime}:00-05:00`);
   const capacity = Number(data.capacity);

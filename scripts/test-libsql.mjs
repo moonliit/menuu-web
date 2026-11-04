@@ -1433,6 +1433,16 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     await expireUnpaidCheckouts();
     assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [expiryOffer])).rows[0].count, 0);
     assert.equal((await getOrders(consumers[0].id)).find((order) => order.id === unpaid.id).paymentStatus, "expired");
+    const hourOffer = await saveOffer("test-kitchen", {
+      dishId, date: offerDate, deliveryTime: "15:00", pickupUntil: "16:00",
+      bookingDeadline: `${offerDate}T14:00:00-05:00`, capacity: 1,
+    });
+    assert.equal((await db.query("SELECT pickup_until AS end FROM offers WHERE id=$1", [hourOffer])).rows[0].end, "16:00");
+    await assert.rejects(saveOffer("test-kitchen", {
+      dishId, date: offerDate, deliveryTime: "15:00", pickupUntil: "16:01",
+      bookingDeadline: `${offerDate}T14:00:00-05:00`, capacity: 1,
+    }), /máximo 1 hora/);
+    await assert.rejects(db.query("UPDATE offers SET pickup_until='16:01' WHERE id=$1", [hourOffer]));
     console.log(
       "libSQL: migración, reserva, Yape, aprobación, porción adicional y vencimiento correctos.",
     );
