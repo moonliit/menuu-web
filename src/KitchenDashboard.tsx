@@ -12,6 +12,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   Info,
   X,
 } from "lucide-react";
@@ -3184,6 +3185,7 @@ type PendingPayment = {
 
 function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]; onChanged: () => Promise<void> }) {
   const [busy, setBusy] = useState("");
+  const [confirmingId, setConfirmingId] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   async function review(id: string, decision: "approved" | "rejected") {
@@ -3191,6 +3193,7 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
     setError("");
     try {
       await request(`/api/admin/payments/${id}/review`, { decision, note: notes[id] || "" });
+      setConfirmingId("");
       await onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No pudimos revisar el pago.");
@@ -3204,7 +3207,12 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
       <strong>{money(payment.amountCents / 100)}</strong>
       <a href={`/api/payments/${payment.id}/proof`} target="_blank" rel="noreferrer">Ver comprobante</a>
       <label>Motivo de rechazo<input value={notes[payment.id] || ""} maxLength={300} onChange={(event) => setNotes((current) => ({ ...current, [payment.id]: event.target.value }))} placeholder="Solo si rechazas" /></label>
-      <div className="admin-payment-actions"><Button variant="secondary" disabled={!!busy} onClick={() => review(payment.id, "rejected")}>Rechazar</Button><Button disabled={!!busy} onClick={() => review(payment.id, "approved")}>{busy === payment.id ? "Guardando…" : "Aprobar Yape"}</Button></div>
+      <div className="admin-payment-actions"><Button variant="secondary" disabled={!!busy || confirmingId === payment.id} onClick={() => review(payment.id, "rejected")}>Rechazar</Button><Button disabled={!!busy || confirmingId === payment.id} onClick={() => { setError(""); setConfirmingId(payment.id); }}>Aprobar Yape</Button></div>
+      {confirmingId === payment.id && <div className="admin-payment-confirm" role="group" aria-label={`Confirmar Yape de ${payment.studentName}`}>
+        <CircleAlert size={21} aria-hidden="true" />
+        <div><strong>Confirma la aprobación de {money(payment.amountCents / 100)}</strong><p>Verifica que el dinero llegó a la cuenta de Fernando. Al aprobar, se eliminará la imagen del comprobante de la base de datos y no podrás volver a verla aquí.</p></div>
+        <div className="admin-payment-confirm-actions"><Button variant="secondary" disabled={!!busy} onClick={() => setConfirmingId("")}>Volver</Button><Button disabled={!!busy} onClick={() => review(payment.id, "approved")}>{busy === payment.id ? "Aprobando…" : "Sí, aprobar y borrar imagen"}</Button></div>
+      </div>}
     </article>) : <p className="km-empty">No hay pagos anticipados por revisar.</p>}
   </section>;
 }

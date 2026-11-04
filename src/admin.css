@@ -243,6 +243,12 @@
 .admin-payment-card label { grid-column: 1 / 3; display: grid; gap: 5px; font-size: 14px; font-weight: 600; }
 .admin-payment-card input { min-width: 0; width: 100%; }
 .admin-payment-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.admin-payment-confirm { grid-column: 1 / -1; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px 12px; align-items: start; padding: 16px; border: 1px solid var(--color-orange-soft); border-radius: 16px; background: #fff7eb; color: var(--color-text); }
+.admin-payment-confirm > svg { color: var(--color-orange-ink); }
+.admin-payment-confirm strong { color: var(--color-brand); }
+.admin-payment-confirm p { margin: 5px 0 0; font-size: 14px; line-height: 1.5; }
+.admin-payment-confirm-actions { grid-column: 2; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 700px) { .admin-payment-confirm-actions { grid-column: 1 / -1; flex-direction: column; } .admin-payment-confirm-actions .button { width: 100%; } }
 .km-prepaid-note { padding: 12px; border-radius: 12px; background: var(--color-orange-soft); color: var(--color-brand); }
 .km-already-added { color: var(--color-orange-ink) !important; font-weight: 600; }
 @media (max-width: 700px) { .admin-payment-queue { padding: 18px; } .admin-payment-card { grid-template-columns: 1fr auto; } .admin-payment-card a { grid-column: 1 / -1; } .admin-payment-card label { grid-column: 1 / -1; } .admin-payment-actions { grid-column: 1 / -1; justify-content: stretch; } .admin-payment-actions .button { flex: 1; } }
