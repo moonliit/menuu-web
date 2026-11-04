@@ -2695,7 +2695,7 @@ export default function App() {
             <div className="page-heading">
               <span className="eyebrow">TUS BREAKS</span>
               <h1>Mis pedidos</h1>
-              <p>Revisa el estado del pago y llega puntual al punto de encuentro cuando tu reserva esté confirmada.</p>
+              <p>Sigue tus reservas, pagos y recojos en un solo lugar.</p>
             </div>
             {!state.user ? (
               <EmptyState
@@ -3420,6 +3420,11 @@ function OrderCard({
             : "Reservado";
   const settled = order.status !== "reservado";
   const canCancel = order.status === "reservado" && !afterDelivery && !order.paymentCheckoutId;
+  const firstItem = order.items[0];
+  const otherItems = order.items.length - 1;
+  const paymentLabel = order.paymentCheckoutId
+    ? `Yape · ${order.paymentStatus === "approved" ? "aprobado" : order.paymentStatus === "under_review" ? "en revisión" : order.paymentStatus === "awaiting_proof" ? "falta comprobante" : order.paymentStatus === "expired" ? "plazo vencido" : "rechazado"}`
+    : order.payment;
   async function cancelReservation() {
     setCancelBusy(true);
     setError("");
@@ -3439,116 +3444,79 @@ function OrderCard({
   }
   return (
     <article className="order-card">
-      <div className="order-head">
-        <div>
-          <span className="eyebrow">RESERVA {order.code}</span>
-          <h2>{order.kitchenName}</h2>
-        </div>
-        <span className={`order-status ${settled ? "order-status-ended" : ""}`}>
-          {settled ? <Clock3 size={16} /> : <Check size={16} />}
-          {label}
-        </span>
-      </div>
-      <div className="order-items">
-        {order.items.map((item) => (
-          <div key={item.id}>
-            <span>
-              {item.quantity} × {item.name}
-              {item.choices.length > 0 && (
-                <small>
-                  {item.choices.map((choice) => choice.label).join(" · ")}
-                </small>
-              )}
-              {item.comment && <small>Comentario: {item.comment}</small>}
-            </span>
-            <strong>{money(item.totalSoles)}</strong>
-          </div>
-        ))}
-      </div>
-      <div className="order-pickup">
-        <BrandCalendarIcon size={20} />
-        <div>
-          <strong>Recojo</strong>
-          <span>
-            {dateLabel(order.date)} ·{" "}
-            {pickupWindow(order.deliveryTime, order.pickupUntil)}
-          </span>
-        </div>
-      </div>
-      <div className="order-foot">
-        <span>{order.paymentCheckoutId ? `Yape anticipado · ${order.paymentStatus === "approved" ? "aprobado" : order.paymentStatus === "under_review" ? "en revisión" : order.paymentStatus === "awaiting_proof" ? "falta comprobante" : order.paymentStatus === "expired" ? "plazo vencido" : "rechazado"}` : order.payment}</span>
-        <strong>Total {money(order.totalSoles)}</strong>
-      </div>
-      {showPayment && <PaymentInstructions order={order} onUploaded={onReviewed} />}
-      {showPayment && order.paymentStatus === "under_review" && <p className="yape-status" role="status">Recibimos tu comprobante. Confirmaremos la reserva cuando se verifique el Yape.</p>}
-      {showPayment && order.paymentStatus === "rejected" && <p className="form-error" role="alert">El comprobante fue rechazado: {order.paymentReviewNote}. Si ya yapeaste, contacta a Menúu para revisar el movimiento.</p>}
-      {showPayment && order.paymentStatus === "expired" && <p className="form-error" role="status">El plazo para subir el comprobante terminó y se liberó el cupo. Si ya yapeaste, contacta a Menúu.</p>}
-      {order.paymentStatus === "approved" && <p className="yape-status">Pago anticipado aprobado. Solo falta recoger tu pedido.</p>}
-      {showPayment && order.paymentStatus === "approved" && order.status === "reservado" && <p className="yape-cancel-note">Si necesitas cancelar este pedido pagado, contacta a Menúu para coordinar la devolución.</p>}
-      {canCancel && (
-        <div className="order-cancel">
-          {cancelOpen ? (
-            <div className="order-cancel-confirm">
-              <p>
-                ¿Cancelar esta reserva? Se liberarán las porciones para otros
-                estudiantes.
-              </p>
-              <div>
-                <Button
-                  variant="secondary"
-                  onClick={() => setCancelOpen(false)}
-                  disabled={cancelBusy}
-                >
-                  Volver
-                </Button>
-                <Button onClick={cancelReservation} disabled={cancelBusy}>
-                  {cancelBusy ? "Cancelando…" : "Sí, cancelar reserva"}
-                </Button>
-              </div>
+      <div className="order-overview">
+        {firstItem && <img className="order-thumbnail" src={firstItem.imageUrl || "/images/menuu-logo.png"} alt="" loading="lazy" />}
+        <div className="order-overview-content">
+          <div className="order-head">
+            <div>
+              <span className="eyebrow">RESERVA {order.code}</span>
+              <h2>{order.kitchenName}</h2>
             </div>
-          ) : (
-            <button
-              type="button"
-              className="order-cancel-link"
-              onClick={() => setCancelOpen(true)}
-            >
-              Cancelar reserva
-            </button>
-          )}
-          {error && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
-      {order.kitchenRating !== null && (
-        <div className="review-saved">
-          <Star size={17} fill="currentColor" aria-hidden="true" /> Calificaste la comida de {order.kitchenName}.
-          {order.kitchenComment && <span>“{order.kitchenComment}”</span>}
-        </div>
-      )}
-      {order.status === "entrega_pendiente" && (
-        <p className="review-note">
-          Tu solicitud está registrada. La entrega aún no ha sido confirmada.
-        </p>
-      )}
-      {order.status === "no_se_presento" && (
-        <p className="review-note">
-          No se registró el recojo dentro de los 15 minutos posteriores a la
-          hora prevista.
-        </p>
-      )}
-      {order.status === "entregado" &&
-        !order.reviewEnabled &&
-        order.kitchenRating === null && (
-          <p className="review-note">
-            La reseña todavía no está habilitada para este pedido.
+            <span className={`order-status ${settled ? "order-status-ended" : ""}`}>
+              {settled ? <Clock3 size={16} /> : <Check size={16} />}
+              {label}
+            </span>
+          </div>
+          <p className="order-dish-preview">
+            {firstItem ? `${firstItem.quantity} × ${firstItem.name}` : "Pedido"}
+            {otherItems > 0 && <span> + {otherItems} {otherItems === 1 ? "plato" : "platos"} más</span>}
           </p>
-        )}
-      {canReview && (
+          <div className="order-highlights">
+            <span className="order-pickup"><BrandCalendarIcon size={18} aria-hidden="true" /> Recojo: {dateLabel(order.date)} · {pickupWindow(order.deliveryTime, order.pickupUntil)}</span>
+            <strong>{money(order.totalSoles)}</strong>
+          </div>
+        </div>
+      </div>
+      <div className="order-card-bottom">
+        <span>{paymentLabel}</span>
+        <details className="order-details">
+          <summary>Ver detalle <ChevronDown size={17} aria-hidden="true" /></summary>
+          <div className="order-details-content">
+            <div className="order-items">
+              {order.items.map((item) => (
+                <div key={item.id}>
+                  <span>
+                    {item.quantity} × {item.name}
+                    {item.choices.length > 0 && <small>{item.choices.map((choice) => choice.label).join(" · ")}</small>}
+                    {item.comment && <small>Comentario: {item.comment}</small>}
+                  </span>
+                  <strong>{money(item.totalSoles)}</strong>
+                </div>
+              ))}
+            </div>
+            {order.paymentStatus === "approved" && order.status === "reservado" && <p className="yape-cancel-note">Si necesitas cancelar este pedido pagado, contacta a Menúu para coordinar la devolución.</p>}
+            {order.status === "entrega_pendiente" && <p className="review-note">Tu solicitud está registrada. La entrega aún no ha sido confirmada.</p>}
+            {order.status === "no_se_presento" && <p className="review-note">No se registró el recojo dentro de los 15 minutos posteriores a la hora prevista.</p>}
+            {order.status === "entregado" && !order.reviewEnabled && order.kitchenRating === null && <p className="review-note">La reseña todavía no está habilitada para este pedido.</p>}
+            {order.kitchenRating !== null && <p className="review-note">Calificaste la comida de {order.kitchenName}.{order.kitchenComment && <> “{order.kitchenComment}”</>}</p>}
+            {canCancel && (
+              <div className="order-cancel">
+                {cancelOpen ? (
+                  <div className="order-cancel-confirm">
+                    <p>¿Cancelar esta reserva? Se liberarán las porciones para otros estudiantes.</p>
+                    <div>
+                      <Button variant="secondary" onClick={() => setCancelOpen(false)} disabled={cancelBusy}>Volver</Button>
+                      <Button onClick={cancelReservation} disabled={cancelBusy}>{cancelBusy ? "Cancelando…" : "Sí, cancelar reserva"}</Button>
+                    </div>
+                  </div>
+                ) : <button type="button" className="order-cancel-link" onClick={() => setCancelOpen(true)}>Cancelar reserva</button>}
+                {error && <p className="form-error" role="alert">{error}</p>}
+              </div>
+            )}
+          </div>
+        </details>
+      </div>
+      {showPayment && order.paymentStatus === "awaiting_proof" && <details className="order-action-panel">
+        <summary>Completar pago con Yape <ChevronDown size={17} aria-hidden="true" /></summary>
+        <PaymentInstructions order={order} onUploaded={onReviewed} />
+      </details>}
+      {showPayment && order.paymentStatus === "under_review" && <p className="order-attention" role="status">Recibimos tu comprobante. Confirmaremos tu reserva al verificar el Yape.</p>}
+      {showPayment && order.paymentStatus === "rejected" && <p className="order-attention order-attention-error" role="alert">Comprobante rechazado: {order.paymentReviewNote}. Si ya yapeaste, contacta a Menúu.</p>}
+      {showPayment && order.paymentStatus === "expired" && <p className="order-attention order-attention-error" role="status">Terminó el plazo para subir el comprobante y se liberó el cupo. Si ya yapeaste, contacta a Menúu.</p>}
+      {canReview && <details className="order-action-panel">
+        <summary>Calificar mi comida <ChevronDown size={17} aria-hidden="true" /></summary>
         <KitchenReviewForm review={{ orderId: order.id, kitchenName: order.kitchenName, code: order.code, items: order.items }} onSaved={onReviewed} />
-      )}
+      </details>}
     </article>
   );
 }
