@@ -1,6 +1,6 @@
 # Menúu - consumidores
 
-App de estudiantes y cocinas con catálogo semanal, personalización, reservas, pedidos y estadísticas. La fuente de verdad es **libSQL**: un archivo SQLite en local y una base **Turso** remota en producción. La lista de espera de `menuu-landing` usa otra base Turso independiente.
+App de estudiantes y cocinas con catálogo semanal, personalización, reservas, pedidos y estadísticas. La fuente de verdad es **libSQL**: un archivo SQLite en local y una base **Turso** remota en producción. La lista de espera de `menuu-landing` usa otra base Turso independiente. 
 
 ## Desarrollo local
 
