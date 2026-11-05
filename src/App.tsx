@@ -3485,23 +3485,23 @@ function PickupNoticeDialog({ schedules, onClose, onConfirm }: {
   return createPortal(<dialog ref={ref} className="pickup-notice-dialog" aria-labelledby="pickup-notice-title" onClose={onClose}>
     <div className="pickup-notice-scroll dialog-scroll">
       <button type="button" className="icon-button pickup-notice-close" onClick={() => ref.current?.close()} aria-label="Cerrar aviso de recojo"><X size={20} /></button>
-      <span className="eyebrow">ANTES DE RESERVAR</span>
-      <h2 id="pickup-notice-title">Ten presente tu hora de recojo</h2>
-      <p className="pickup-notice-intro">Tu comida te esperará en la Entrada del Comedor UTEC, piso 2, durante {schedules.length === 1 ? "este horario" : "estos horarios"}:</p>
+      <span className="eyebrow">ANTES DE PAGAR</span>
+      <h2 id="pickup-notice-title">Confirma tu recojo</h2>
+      <p className="pickup-notice-intro">Entrada del Comedor UTEC · piso 2</p>
       <div className="pickup-notice-windows">
         {schedules.map((schedule) => <section className="pickup-notice-window" key={`${schedule.date}|${schedule.start}|${schedule.end}`} aria-label={`Recojo de ${schedule.dishes.join(", ")}`}>
-          <p className="pickup-notice-date"><Clock3 size={18} aria-hidden="true" /> {dateLabel(schedule.date, { weekday: "long", day: "numeric", month: "long" })}</p>
+          <p className="pickup-notice-date">{capitalizeFirst(dateLabel(schedule.date, { weekday: "long", day: "numeric", month: "long" }))}</p>
           <div className="pickup-notice-hours">
-            <div><span>Comienza</span><strong>{timeLabel(schedule.start)}</strong></div>
-            <ArrowRight size={21} aria-hidden="true" />
-            <div className="pickup-notice-end"><span>Termina</span><strong>{timeLabel(schedule.end)}</strong></div>
+            <div><span>Desde</span><strong>{timeLabel(schedule.start)}</strong></div>
+            <ArrowRight size={18} aria-hidden="true" />
+            <div className="pickup-notice-end"><span>Hasta</span><strong>{timeLabel(schedule.end)}</strong></div>
           </div>
-          <small>{schedule.dishes.join(" · ")}</small>
+          {schedules.length > 1 && <small>{schedule.dishes.join(" · ")}</small>}
         </section>)}
       </div>
-      <p className="pickup-notice-fridge"><Refrigerator size={24} aria-hidden="true" /><span>Si no alcanzas a recogerla a tiempo, dejaremos tu táper en la refri. Subiremos una foto de dónde quedó para que puedas encontrarlo en <strong>Pedidos</strong>.</span></p>
-      <div className="pickup-notice-actions"><Button type="button" variant="secondary" onClick={() => ref.current?.close()}>Volver al carrito</Button><Button type="button" onClick={() => { ref.current?.close(); onConfirm(); }}>Confirmar y continuar a Yape <ArrowRight size={18} aria-hidden="true" /></Button></div>
-      <p className="pickup-notice-ack">Al confirmar, entiendo que el recojo fuera {schedules.length === 1 ? "del horario indicado" : "de los horarios indicados"} queda a mi cargo. Si llego después, revisaré la foto de la refri para ubicar mi comida.</p>
+      <p className="pickup-notice-fridge"><Refrigerator size={20} aria-hidden="true" /><span>¿No llegas a tiempo? Dejaremos tu comida en la refri y subiremos una foto de su ubicación en <strong>Pedidos</strong>.</span></p>
+      <div className="pickup-notice-actions"><Button type="button" variant="quiet" onClick={() => ref.current?.close()}>Volver</Button><Button type="button" onClick={() => { ref.current?.close(); onConfirm(); }}>Confirmar e ir a Yape</Button></div>
+      <p className="pickup-notice-ack">Al confirmar, entiendo que recogerla fuera de horario queda a mi cargo.</p>
     </div>
   </dialog>, document.body);
 }
