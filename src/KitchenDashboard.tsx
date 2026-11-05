@@ -6,6 +6,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowRight,
   Check,
@@ -79,7 +80,7 @@ type KitchenReservation = {
   studentEmail: string;
   quantity: number;
   unitPriceCents: number;
-  orderTotalCents?: number;
+  itemTotalCents?: number;
   deliveredQuantity: number | null;
   bookingDeadlineAt: string | null;
   status: string;
@@ -1348,9 +1349,6 @@ function KitchenReservationPanel({
                       {item.quantity === 1 ? "porción" : "porciones"} ·{" "}
                       {item.code}
                     </small>
-                    {apiPrefix === "/api/admin" && item.orderTotalCents !== undefined && (
-                      <small className="km-reservation-price">Total del pedido: <strong>{money(item.orderTotalCents / 100)}</strong></small>
-                    )}
                     <small>
                       {item.extraPortion ? "Porción adicional · pago en el recojo" : item.manualAdded ? "Alta manual" : item.paymentCheckoutId ? "Reserva previa · Yape" : "Reserva anterior"} ·{" "}
                       {new Intl.DateTimeFormat("es-PE", {
@@ -2599,17 +2597,13 @@ export default function KitchenDashboard({
       (item) =>
         item.date >= weeks[week] && item.date < weekDate(weeks[week], 7),
     ) || [];
-  const showError = error && (
-    <div className="km-alert" role="alert">
-      {error}
-      <button
-        type="button"
-        onClick={() => setError("")}
-        aria-label="Cerrar error"
-      >
-        <X size={18} />
-      </button>
-    </div>
+  const showError = error && createPortal(
+    <aside className="auth-warning-toast kitchen-error-toast" role="alert">
+      <CircleAlert size={22} aria-hidden="true" />
+      <span>{error}</span>
+      <button type="button" onClick={() => setError("")} aria-label="Cerrar aviso"><X size={19} aria-hidden="true" /></button>
+    </aside>,
+    document.body,
   );
   const renderOfferEditor = (offer: Offer, data: Data) => {
     const basePrice = data.dishes.find((item) => item.id === offer.dishId)?.priceSoles;
@@ -2618,6 +2612,10 @@ export default function KitchenDashboard({
       className="km-editor"
       onSubmit={(event) => {
         event.preventDefault();
+        if (offer.date < current) {
+          setError("Solo puedes publicar menús de hoy o de fechas futuras.");
+          return;
+        }
         save(
           "/api/kitchen/offers",
           {
@@ -2655,7 +2653,7 @@ export default function KitchenDashboard({
           <input
             type="date"
             required
-            min={current}
+            max={weekDate(weeks[1], 5)}
             value={offer.date}
             onChange={(event) =>
               setOffer({ ...offer, date: event.target.value })
@@ -3442,6 +3440,7 @@ function AdminOfferRow({
     (item) =>
       item.status === "reservado" && item.fulfillmentStatus !== "no_show",
   );
+  const ordersTotalCents = active.reduce((sum, item) => sum + (item.itemTotalCents || 0), 0);
   async function saveCapacity(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -3486,6 +3485,7 @@ function AdminOfferRow({
           <span>
             {offer.reservedCount} de {offer.capacity} porciones ocupadas
           </span>
+          <span>Total de pedidos: <strong>{money(ordersTotalCents / 100)}</strong></span>
         </div>
         <form className="admin-capacity" onSubmit={saveCapacity}>
           <label htmlFor={`admin-capacity-${offer.id}`}>Cupo</label>

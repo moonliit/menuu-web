@@ -224,6 +224,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       bookingDeadline: `${offerDate}T12:00:00-05:00`,
       capacity: 1,
     });
+    const previousMonday = new Date(Date.parse(`${weekStart()}T12:00:00Z`) - 7 * 86400_000).toISOString().slice(0, 10);
+    await assert.rejects(saveOffer("test-kitchen", {
+      dishId, date: previousMonday, deliveryTime: "13:00", pickupUntil: "14:00",
+      bookingDeadline: `${previousMonday}T12:59:00-05:00`, capacity: 2,
+    }), { status: 400 });
     const catalog = await getCatalog();
 
     assert.equal(catalog.offerings.length, 1);
@@ -734,8 +739,8 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       );
       assert.ok(allAdminData.reservations.length > 0);
       for (const reservation of allAdminData.reservations) {
-        const savedTotal = await db.query("SELECT total_cents AS total FROM orders WHERE id=$1", [reservation.orderId]);
-        assert.equal(reservation.orderTotalCents, savedTotal.rows[0].total);
+        const savedTotal = await db.query("SELECT total_cents AS total FROM order_items WHERE id=$1", [reservation.orderItemId]);
+        assert.equal(reservation.itemTotalCents, savedTotal.rows[0].total);
       }
       const adminPageResponse = await fetch(
         `${base}/api/admin/data?week=1&limit=1&offset=0`,
