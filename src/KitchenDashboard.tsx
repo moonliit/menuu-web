@@ -80,7 +80,6 @@ type KitchenReservation = {
   studentEmail: string;
   quantity: number;
   unitPriceCents: number;
-  itemTotalCents?: number;
   deliveredQuantity: number | null;
   bookingDeadlineAt: string | null;
   status: string;
@@ -3362,6 +3361,7 @@ type AdminOffer = Pick<
   dishName: string;
   imageUrl: string;
   imageAlt: string;
+  menuPriceCents: number;
 };
 type AdminData = {
   weekStart: string;
@@ -3440,7 +3440,6 @@ function AdminOfferRow({
     (item) =>
       item.status === "reservado" && item.fulfillmentStatus !== "no_show",
   );
-  const ordersTotalCents = active.reduce((sum, item) => sum + (item.itemTotalCents || 0), 0);
   async function saveCapacity(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -3469,6 +3468,7 @@ function AdminOfferRow({
         <div className="admin-offer-copy">
           <span className="admin-kitchen-name">{offer.kitchenName}</span>
           <h2>{offer.dishName}</h2>
+          <strong className="admin-offer-price">Precio del menú: {money(offer.menuPriceCents / 100)}</strong>
           <p>
             {dateLabel(offer.date, {
               weekday: "short",
@@ -3485,7 +3485,6 @@ function AdminOfferRow({
           <span>
             {offer.reservedCount} de {offer.capacity} porciones ocupadas
           </span>
-          <span>Total de pedidos: <strong>{money(ordersTotalCents / 100)}</strong></span>
         </div>
         <form className="admin-capacity" onSubmit={saveCapacity}>
           <label htmlFor={`admin-capacity-${offer.id}`}>Cupo</label>

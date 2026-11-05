@@ -193,6 +193,13 @@
   color: var(--color-brand);
   font: 500 21px/1.2 var(--font-display);
 }
+.admin-offer-price {
+  display: block;
+  margin: 0 0 3px;
+  color: var(--color-brand);
+  font-size: 14px;
+  font-weight: 600;
+}
 .admin-offer-copy p {
   margin: 0;
   color: var(--color-muted);

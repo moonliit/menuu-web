@@ -737,10 +737,14 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         new Set(allAdminData.offers.map((item) => item.kitchenId)),
         new Set(["test-kitchen", "second-kitchen"]),
       );
+      for (const offer of allAdminData.offers) {
+        const savedPrice = await db.query("SELECT COALESCE(o.price_override_cents,d.price_cents) AS price FROM offers o JOIN dishes d ON d.kitchen_id=o.kitchen_id AND d.id=o.dish_id WHERE o.id=$1", [offer.id]);
+        assert.equal(offer.menuPriceCents, savedPrice.rows[0].price);
+      }
       assert.ok(allAdminData.reservations.length > 0);
       for (const reservation of allAdminData.reservations) {
-        const savedTotal = await db.query("SELECT total_cents AS total FROM order_items WHERE id=$1", [reservation.orderItemId]);
-        assert.equal(reservation.itemTotalCents, savedTotal.rows[0].total);
+        assert.equal("orderTotalCents" in reservation, false);
+        assert.equal("itemTotalCents" in reservation, false);
       }
       const adminPageResponse = await fetch(
         `${base}/api/admin/data?week=1&limit=1&offset=0`,

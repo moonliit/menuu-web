@@ -31,7 +31,7 @@ export async function adminData({
       `SELECT o.id,o.kitchen_id AS "kitchenId",k.name AS "kitchenName",k.logo_url AS "kitchenLogoUrl",
        o.dish_id AS "dishId",d.name AS "dishName",d.image_url AS "imageUrl",d.image_alt AS "imageAlt",
        o.offer_date AS date,o.delivery_time AS "deliveryTime",COALESCE(o.pickup_until_extended,o.pickup_until) AS "pickupUntil",
-       o.booking_deadline_at AS "bookingDeadline",o.capacity,o.reserved_count AS "reservedCount",
+       o.booking_deadline_at AS "bookingDeadline",o.capacity,o.reserved_count AS "reservedCount",COALESCE(o.price_override_cents,d.price_cents) AS "menuPriceCents",
        o.published_at AS "publishedAt"
        FROM offers o JOIN kitchens k ON k.id=o.kitchen_id
        JOIN dishes d ON d.kitchen_id=o.kitchen_id AND d.id=o.dish_id
@@ -53,7 +53,7 @@ export async function adminData({
   const offerIds = offers.rows.map((offer) => offer.id);
   const reservations = offerIds.length ? await getDb().query(
       `SELECT i.offer_id AS "offerId",i.id AS "orderItemId",r.id AS "orderId",r.code,
-       u.name AS "studentName",u.email AS "studentEmail",i.quantity,i.unit_price_cents AS "unitPriceCents",i.total_cents AS "itemTotalCents",
+       u.name AS "studentName",u.email AS "studentEmail",i.quantity,i.unit_price_cents AS "unitPriceCents",
        i.delivered_quantity AS "deliveredQuantity",i.booking_deadline_at AS "bookingDeadlineAt",
        r.status,r.fulfillment_status AS "fulfillmentStatus",r.payment_recorded AS "paymentRecorded",r.delivered_at AS "deliveredAt",
        r.payment_checkout_id AS "paymentCheckoutId",p.status AS "paymentStatus",
