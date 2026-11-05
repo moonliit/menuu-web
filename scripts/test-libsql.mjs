@@ -732,6 +732,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         new Set(allAdminData.offers.map((item) => item.kitchenId)),
         new Set(["test-kitchen", "second-kitchen"]),
       );
+      assert.ok(allAdminData.reservations.length > 0);
+      for (const reservation of allAdminData.reservations) {
+        const savedTotal = await db.query("SELECT total_cents AS total FROM orders WHERE id=$1", [reservation.orderId]);
+        assert.equal(reservation.orderTotalCents, savedTotal.rows[0].total);
+      }
       const adminPageResponse = await fetch(
         `${base}/api/admin/data?week=1&limit=1&offset=0`,
         {

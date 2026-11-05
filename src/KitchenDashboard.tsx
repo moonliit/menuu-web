@@ -79,6 +79,7 @@ type KitchenReservation = {
   studentEmail: string;
   quantity: number;
   unitPriceCents: number;
+  orderTotalCents?: number;
   deliveredQuantity: number | null;
   bookingDeadlineAt: string | null;
   status: string;
@@ -1347,6 +1348,9 @@ function KitchenReservationPanel({
                       {item.quantity === 1 ? "porción" : "porciones"} ·{" "}
                       {item.code}
                     </small>
+                    {apiPrefix === "/api/admin" && item.orderTotalCents !== undefined && (
+                      <small className="km-reservation-price">Total del pedido: <strong>{money(item.orderTotalCents / 100)}</strong></small>
+                    )}
                     <small>
                       {item.extraPortion ? "Porción adicional · pago en el recojo" : item.manualAdded ? "Alta manual" : item.paymentCheckoutId ? "Reserva previa · Yape" : "Reserva anterior"} ·{" "}
                       {new Intl.DateTimeFormat("es-PE", {

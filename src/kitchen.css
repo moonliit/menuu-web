@@ -1113,6 +1113,11 @@
   font-size: 12px;
   color: var(--color-muted);
 }
+.km-reservation-person .km-reservation-price {
+  margin-top: 3px;
+  font-size: 14px;
+  color: var(--color-text);
+}
 .km-reservation-state {
   display: inline-flex;
   align-items: center;
