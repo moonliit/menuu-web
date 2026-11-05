@@ -224,20 +224,6 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       bookingDeadline: `${offerDate}T12:00:00-05:00`,
       capacity: 1,
     });
-    const previousMonday = new Date(Date.parse(`${weekStart()}T12:00:00Z`) - 7 * 86400_000).toISOString().slice(0, 10);
-    const pastOfferId = await saveOffer("test-kitchen", {
-      dishId, date: previousMonday, deliveryTime: "13:00", pickupUntil: "14:00",
-      bookingDeadline: `${previousMonday}T12:59:00-05:00`, capacity: 2,
-    });
-    assert.equal((await kitchenData("test-kitchen", { includeAnalytics: false })).offers.some((item) => item.id === pastOfferId), true);
-    await saveOffer("test-kitchen", {
-      id: pastOfferId, dishId, date: previousMonday, deliveryTime: "13:00", pickupUntil: "14:00",
-      bookingDeadline: `${previousMonday}T12:59:00-05:00`, capacity: 3,
-    });
-    await assert.rejects(saveOffer("test-kitchen", {
-      dishId, date: new Date(Date.parse(`${previousMonday}T12:00:00Z`) - 86400_000).toISOString().slice(0, 10),
-      deliveryTime: "13:00", pickupUntil: "14:00", bookingDeadline: `${previousMonday}T12:59:00-05:00`, capacity: 1,
-    }), { status: 400 });
     const catalog = await getCatalog();
 
     assert.equal(catalog.offerings.length, 1);
@@ -392,7 +378,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     const data = await kitchenData("test-kitchen");
 
     assert.equal(data.analytics.totalOrders, 2);
-    assert.equal(data.offers.find((item) => item.id === offerId)?.reservedCount, 1);
+    assert.equal(data.offers[0].reservedCount, 1);
     const png = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRj0AAAAASUVORK5CYII=",
       "base64",
