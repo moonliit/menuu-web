@@ -213,6 +213,7 @@ async function loadOptions(client, scope, kitchenId) {
 export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
   const db = getDb();
   const start = weekStart();
+  const previousStart = new Date(Date.parse(`${start}T12:00:00Z`) - 7 * 86400_000).toISOString().slice(0, 10);
   const today = todayLima();
   const since = new Date(Date.now() - 28 * 86400_000).toISOString();
   const [
@@ -234,8 +235,8 @@ export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
       [kitchenId],
     ),
     db.query(
-      `SELECT id,dish_id AS "dishId",offer_date AS date,delivery_time AS "deliveryTime",COALESCE(pickup_until_extended,pickup_until) AS "pickupUntil",booking_deadline_at AS "bookingDeadline",capacity,reserved_count AS "reservedCount",description_override AS "descriptionOverride",price_override_cents AS "priceOverrideCents",customization_override AS "hasCustomizationOverride",published_at AS "publishedAt",sold_out_at AS "soldOutAt" FROM offers WHERE kitchen_id=$1 AND offer_date >= $2 AND offer_date < date($2, '+14 days') ORDER BY offer_date,delivery_time,id`,
-      [kitchenId, start],
+      `SELECT id,dish_id AS "dishId",offer_date AS date,delivery_time AS "deliveryTime",COALESCE(pickup_until_extended,pickup_until) AS "pickupUntil",booking_deadline_at AS "bookingDeadline",capacity,reserved_count AS "reservedCount",description_override AS "descriptionOverride",price_override_cents AS "priceOverrideCents",customization_override AS "hasCustomizationOverride",published_at AS "publishedAt",sold_out_at AS "soldOutAt" FROM offers WHERE kitchen_id=$1 AND offer_date >= $2 AND offer_date < date($2, '+21 days') ORDER BY offer_date,delivery_time,id`,
+      [kitchenId, previousStart],
     ),
     includeAnalytics ? db.query(
       `SELECT o.id,o.dish_id AS "dishId",d.name AS "dishName",o.offer_date AS date,o.capacity,o.reserved_count AS "reservedCount",o.published_at AS "publishedAt",o.sold_out_at AS "soldOutAt",COALESCE(sum(i.quantity) FILTER (WHERE r.status='reservado' AND r.fulfillment_status<>'no_show' AND (r.payment_checkout_id IS NULL OR p.status='approved')),0) AS units,COALESCE(sum(i.total_cents) FILTER (WHERE r.status='reservado' AND r.fulfillment_status<>'no_show' AND (r.payment_checkout_id IS NULL OR p.status='approved')),0) AS "revenueCents",count(DISTINCT r.id) FILTER (WHERE r.status='reservado' AND r.fulfillment_status<>'no_show' AND (r.payment_checkout_id IS NULL OR p.status='approved')) AS "orderCount",min(r.created_at) FILTER (WHERE r.status='reservado' AND r.fulfillment_status<>'no_show' AND (r.payment_checkout_id IS NULL OR p.status='approved')) AS "firstBookingAt" FROM offers o JOIN dishes d ON d.kitchen_id=o.kitchen_id AND d.id=o.dish_id LEFT JOIN order_items i ON i.offer_id=o.id LEFT JOIN orders r ON r.id=i.order_id AND r.created_at >= $2 LEFT JOIN payment_checkouts p ON p.id=r.payment_checkout_id WHERE o.kitchen_id=$1 AND o.offer_date >= date($3, '-28 days') AND o.offer_date < date($3, '+14 days') GROUP BY o.id,d.name ORDER BY o.offer_date DESC,o.id`,
@@ -259,10 +260,10 @@ export async function kitchenData(kitchenId, { includeAnalytics = true } = {}) {
          EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_add') AS "manualAdded",
          EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='extra_portion') AS "extraPortion"
          FROM orders r JOIN order_items i ON i.order_id=r.id JOIN users u ON u.id=r.user_id JOIN offers o ON o.id=i.offer_id LEFT JOIN payment_checkouts p ON p.id=r.payment_checkout_id
-         WHERE r.kitchen_id=$1 AND o.kitchen_id=$1 AND o.offer_date >= $2 AND o.offer_date < date($2, '+14 days')
+         WHERE r.kitchen_id=$1 AND o.kitchen_id=$1 AND o.offer_date >= $2 AND o.offer_date < date($2, '+21 days')
            AND NOT EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=r.id AND e.action='manual_remove')
          ORDER BY o.offer_date,o.delivery_time,u.name,r.created_at`,
-      [kitchenId, start],
+      [kitchenId, previousStart],
     ),
   ]);
 
@@ -919,8 +920,7 @@ export async function saveDish(kitchenId, data) {
 export async function saveOffer(kitchenId, data) {
   const id = data?.id || randomUUID();
 
-  if (!validDate(data?.date) || data.date < todayLima())
-    fail("Solo puedes editar menús de hoy o de fechas futuras.");
+  if (!validDate(data?.date)) fail("Indica una fecha válida para el menú.");
   const offerDay = new Date(`${data.date}T12:00:00Z`).getUTCDay();
 
   if (offerDay === 0) fail("Los domingos no forman parte del menú semanal.");
@@ -928,11 +928,13 @@ export async function saveOffer(kitchenId, data) {
 
   monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
   const end = new Date(monday);
+  const earliest = new Date(monday);
 
   end.setUTCDate(end.getUTCDate() + 14);
+  earliest.setUTCDate(earliest.getUTCDate() - 7);
 
-  if (data.date >= end.toISOString().slice(0, 10))
-    fail("Publica en esta semana o la siguiente.");
+  if (data.date < earliest.toISOString().slice(0, 10) || data.date >= end.toISOString().slice(0, 10))
+    fail("Publica en la semana anterior, esta semana o la siguiente.");
 
   if (
     !validTime(data.deliveryTime) ||
@@ -964,7 +966,7 @@ export async function saveOffer(kitchenId, data) {
   )
     fail("Revisa el cierre de reserva y las porciones.");
 
-  if (!data.id && (deadline <= new Date() || pickup <= new Date()))
+  if (!data.id && data.date >= todayLima() && (deadline <= new Date() || pickup <= new Date()))
     fail("El recojo y el cierre de reserva deben estar en el futuro.");
   const description =
     data.descriptionOverride == null || data.descriptionOverride === ""
@@ -1001,9 +1003,6 @@ export async function saveOffer(kitchenId, data) {
         );
 
         if (!existing.rows[0]) fail("Menú no encontrado.", 404);
-
-        if (existing.rows[0].date < todayLima())
-          fail("No puedes editar un menú pasado.", 403);
 
         if (capacity < existing.rows[0].reserved)
           fail(

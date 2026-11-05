@@ -824,7 +824,6 @@ function KitchenMenuRow({
   dish,
   onTimeCount,
   deliveredCount,
-  today,
   onEdit,
   onReservations,
   reservationsOpen,
@@ -834,13 +833,11 @@ function KitchenMenuRow({
   dish?: Dish;
   onTimeCount: number;
   deliveredCount: number;
-  today: string;
   onEdit: () => void;
   onReservations: () => void;
   reservationsOpen: boolean;
   selected: boolean;
 }) {
-  const past = offer.date < today;
   return (
     <article className={`km-menu-row${selected ? " km-menu-row-selected" : ""}`}>
       <div className="km-menu-date">
@@ -877,13 +874,9 @@ function KitchenMenuRow({
         </small>
       </div>
       <div className="km-menu-action">
-        {past ? (
-          <span className="km-locked">Día pasado</span>
-        ) : (
-          <Button variant="secondary" onClick={onEdit} aria-expanded={selected && !reservationsOpen}>
-            Editar
-          </Button>
-        )}
+        <Button variant="secondary" onClick={onEdit} aria-expanded={selected && !reservationsOpen}>
+          Editar
+        </Button>
         <Button
           variant="quiet"
           onClick={onReservations}
@@ -2590,10 +2583,13 @@ export default function KitchenDashboard({
   monday.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
   const next = new Date(monday);
   next.setUTCDate(monday.getUTCDate() + 7);
-  const weeks = [
-    monday.toISOString().slice(0, 10),
-    next.toISOString().slice(0, 10),
-  ];
+  const previous = new Date(monday);
+  previous.setUTCDate(monday.getUTCDate() - 7);
+  const weeks: Record<number, string> = {
+    [-1]: previous.toISOString().slice(0, 10),
+    0: monday.toISOString().slice(0, 10),
+    1: next.toISOString().slice(0, 10),
+  };
   const visibleOffers =
     data?.offers.filter(
       (item) =>
@@ -2624,7 +2620,10 @@ export default function KitchenDashboard({
             ...offer,
             bookingDeadline: isoFromLocal(offer.bookingDeadline),
           },
-          () => setOffer(null),
+          () => {
+            setOffer(null);
+            setWeek(offer.date < weeks[0] ? -1 : offer.date >= weeks[1] ? 1 : 0);
+          },
         );
       }}
     >
@@ -2655,10 +2654,11 @@ export default function KitchenDashboard({
           <input
             type="date"
             required
-            min={current}
+            min={weeks[-1]}
+            max={weekDate(weeks[1], 5)}
             value={offer.date}
             onChange={(event) =>
-              setOffer({ ...offer, date: event.target.value })
+              setOffer({ ...offer, date: event.target.value, bookingDeadline: `${event.target.value}${offer.bookingDeadline.slice(10)}` })
             }
           />
         </label>
@@ -3253,6 +3253,13 @@ export default function KitchenDashboard({
                 <div role="group" aria-label="Semana">
                   <button
                     type="button"
+                    className={week === -1 ? "active" : ""}
+                    onClick={() => { setWeek(-1); setOffer(null); setReservationsOfferId(null); }}
+                  >
+                    Semana anterior
+                  </button>
+                  <button
+                    type="button"
                     className={week === 0 ? "active" : ""}
                     onClick={() => { setWeek(0); setOffer(null); setReservationsOfferId(null); }}
                   >
@@ -3307,7 +3314,6 @@ export default function KitchenDashboard({
                         dish={data.dishes.find((d) => d.id === item.dishId)}
                         onTimeCount={onTimeReservationsForOffer(data.reservations, item)}
                         deliveredCount={deliveredUnitsForOffer(data.reservations, item.id)}
-                        today={current}
                         selected={offer?.id === item.id || reservationsOfferId === item.id}
                         reservationsOpen={reservationsOfferId === item.id}
                         onReservations={() => {
