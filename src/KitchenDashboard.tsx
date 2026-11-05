@@ -3433,7 +3433,10 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<PendingPayment | null>(null);
+  const [proofPayment, setProofPayment] = useState<PendingPayment | null>(null);
+  const [proofError, setProofError] = useState(false);
   const detailsDialog = useRef<HTMLDialogElement>(null);
+  const proofDialog = useRef<HTMLDialogElement>(null);
   async function review(id: string, decision: "approved" | "rejected") {
     setBusy(id);
     setError("");
@@ -3451,7 +3454,7 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
     {payments.length ? payments.map((payment) => <article className="admin-payment-card" key={payment.id}>
       <div className="admin-payment-identity"><strong>{payment.studentName}</strong><span title={payment.studentEmail}>{payment.studentEmail}</span><small title={payment.orders.flatMap((order) => order.items.map((item) => `${item.quantity} × ${item.name}`)).join(" · ")}>{payment.orderCount} {payment.orderCount === 1 ? "pedido" : "pedidos"} · {payment.orders[0]?.items[0] ? `${payment.orders[0].items[0].quantity} × ${payment.orders[0].items[0].name}` : payment.codes}{payment.orders.reduce((count, order) => count + order.items.length, 0) > 1 ? " y más" : ""}</small></div>
       <div className="admin-payment-total"><strong>{money(payment.amountCents / 100)}</strong><button type="button" className="admin-payment-details-button" title="Ver detalle del pedido" aria-label={`Ver detalle del pedido de ${payment.studentName}`} onClick={() => { setSelected(payment); detailsDialog.current?.showModal(); }}><Eye size={19} aria-hidden="true" /></button></div>
-      <a href={`/api/payments/${payment.id}/proof`} target="_blank" rel="noreferrer">Ver comprobante</a>
+      <button type="button" className="admin-payment-proof-trigger" onClick={() => { setProofPayment(payment); setProofError(false); proofDialog.current?.showModal(); }}>Ver comprobante</button>
       <label>Motivo de rechazo<input value={notes[payment.id] || ""} maxLength={300} onChange={(event) => setNotes((current) => ({ ...current, [payment.id]: event.target.value }))} placeholder="Solo si rechazas" /></label>
       <div className="admin-payment-actions"><Button variant="secondary" disabled={!!busy || confirmingId === payment.id} onClick={() => review(payment.id, "rejected")}>Rechazar</Button><Button disabled={!!busy || confirmingId === payment.id} onClick={() => { setError(""); setConfirmingId(payment.id); }}>Aprobar Yape</Button></div>
       {confirmingId === payment.id && <div className="admin-payment-confirm" role="group" aria-label={`Confirmar Yape de ${payment.studentName}`}>
@@ -3464,6 +3467,10 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
       <div className="admin-users-dialog-head"><div><span className="eyebrow">YAPE POR VERIFICAR</span><h2 id="admin-payment-details-title">Detalle del pedido</h2><p>{selected?.studentName} · {selected?.orderCount} {selected?.orderCount === 1 ? "pedido" : "pedidos"}</p></div><button type="button" className="admin-users-close" aria-label="Cerrar detalle" onClick={() => detailsDialog.current?.close()}><X size={21} /></button></div>
       <div className="admin-payment-details-orders">{selected?.orders.map((order) => <section key={order.id} className="admin-payment-details-order"><div className="admin-payment-details-order-head"><div><strong>{order.kitchenName}</strong><small>{dateLabel(order.date)} · {timeLabel(order.deliveryTime)}–{timeLabel(order.pickupUntil)}</small></div><small>{order.code}</small></div>{order.items.map((item) => <div className={`admin-payment-details-item${item.imageUrl ? "" : " no-image"}`} key={item.id}>{item.imageUrl && <img src={item.imageUrl} alt="" />}<div><strong>{item.quantity} × {item.name}</strong>{item.choices.map((choice, index) => <small key={`${choice.title}-${index}`}>{choice.title}: {choice.label}</small>)}{item.comment && <small>Nota: {item.comment}</small>}</div><strong>{money(item.totalCents / 100)}</strong></div>)}<div className="admin-payment-details-order-total"><span>Total del pedido</span><strong>{money(order.totalCents / 100)}</strong></div></section>)}</div>
       <div className="admin-payment-details-grand-total"><span>Total a verificar</span><strong>{money((selected?.amountCents || 0) / 100)}</strong></div>
+    </dialog>
+    <dialog ref={proofDialog} className="admin-users-dialog admin-payment-proof-dialog" aria-labelledby="admin-payment-proof-title" onClose={() => setProofPayment(null)}>
+      <div className="admin-users-dialog-head"><div><span className="eyebrow">YAPE POR VERIFICAR</span><h2 id="admin-payment-proof-title">Comprobante de pago</h2><p>{proofPayment?.studentName} · {money((proofPayment?.amountCents || 0) / 100)}</p></div><button type="button" className="admin-users-close" aria-label="Cerrar comprobante" onClick={() => proofDialog.current?.close()}><X size={21} /></button></div>
+      {proofPayment && (proofError ? <p className="km-alert" role="alert">No pudimos mostrar el comprobante. Actualiza la lista e inténtalo de nuevo.</p> : <img className="admin-payment-proof-image" src={`/api/payments/${proofPayment.id}/proof`} alt={`Comprobante de Yape enviado por ${proofPayment.studentName}`} onError={() => setProofError(true)} />)}
     </dialog>
   </section>;
 }
