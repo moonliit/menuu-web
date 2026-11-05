@@ -60,6 +60,7 @@ import {
   money,
   nextBookableDate,
   pickupWindow,
+  timeLabel,
   weekDate,
   type Bootstrap,
   type CartItem,
@@ -1620,6 +1621,7 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState("");
   const [reviewPrompt, setReviewPrompt] = useState<ReviewableOrder | null>(null);
   const [fridgeNotices, setFridgeNotices] = useState<FridgeNotice[] | null>(null);
+  const [pickupNoticeOpen, setPickupNoticeOpen] = useState(false);
   const [paymentPrompt, setPaymentPrompt] = useState<Order | null>(null);
   const [commentsKitchen, setCommentsKitchen] = useState<Kitchen | null>(null);
 
@@ -2039,6 +2041,17 @@ export default function App() {
         ),
     [cart, offers],
   );
+  const pickupSchedules = useMemo(() => {
+    const byWindow = new Map<string, { date: string; start: string; end: string; dishes: string[] }>();
+    for (const { offer } of cartRows) {
+      const key = `${offer.date}|${offer.deliveryTime}|${offer.pickupUntil}`;
+      const found = byWindow.get(key);
+      if (found) {
+        if (!found.dishes.includes(offer.name)) found.dishes.push(offer.name);
+      } else byWindow.set(key, { date: offer.date, start: offer.deliveryTime, end: offer.pickupUntil, dishes: [offer.name] });
+    }
+    return [...byWindow.values()].sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
+  }, [cartRows]);
   const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const total = cartRows.reduce(
     (sum, { item, offer }) =>
@@ -2193,6 +2206,19 @@ export default function App() {
     bookingKeyRef.current = null;
     setBookingError("");
     setCart((current) => current.filter((item) => item.key !== key));
+  }
+  function reviewPickupBeforePayment() {
+    if (!state?.user) {
+      setAuthMessage("Inicia sesión para confirmar tu reserva.");
+      go("cuenta");
+      return;
+    }
+    if (!state.user.bookingAllowed) {
+      setBookingError("No puedes confirmar otra reserva mientras tengas un pedido marcado como no recogido.");
+      return;
+    }
+    setBookingError("");
+    setPickupNoticeOpen(true);
   }
   async function submitBooking() {
     if (!state?.user) {
@@ -2727,7 +2753,7 @@ export default function App() {
                       </p>
                     )}
                     <Button
-                      onClick={submitBooking}
+                      onClick={reviewPickupBeforePayment}
                       disabled={
                         booking ||
                         state.user?.bookingAllowed === false ||
@@ -2966,8 +2992,9 @@ export default function App() {
           <a href={routes.adminUsuarios} aria-current={page === "adminUsuarios" ? "page" : undefined} onClick={(event) => follow(event, "adminUsuarios")}><span className="mobile-icon"><UserRound size={22} /></span><span>Usuarios</span></a>
         </nav>
       )}
-      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice || fridgeNotices || reviewPrompt || paymentPrompt || commentsKitchen)} />
+      <InstallPrompt suppressed={Boolean(selected || dataNotice || notice || fridgeNotices || reviewPrompt || pickupNoticeOpen || paymentPrompt || commentsKitchen)} />
       {fridgeNotices && <FridgeNoticeDialog notices={fridgeNotices} onClose={() => setFridgeNotices(null)} onOrders={() => { setFridgeNotices(null); go("pedidos"); }} />}
+      {pickupNoticeOpen && <PickupNoticeDialog schedules={pickupSchedules} onClose={() => setPickupNoticeOpen(false)} onConfirm={() => { setPickupNoticeOpen(false); void submitBooking(); }} />}
       {paymentPrompt && <PaymentPromptDialog order={paymentPrompt} onClose={() => setPaymentPrompt(null)} onUploaded={async () => {
         setPaymentPrompt(null);
         invalidateCache("orders:");
@@ -3442,6 +3469,39 @@ function KitchenCommentsDialog({ kitchen, onClose }: { kitchen: Kitchen; onClose
         <p>{review.comment}</p>
         <div className="kitchen-comment-items">{review.items.map((item) => <div key={item.id}><img src={item.imageUrl} alt="" loading="lazy" /><span>{item.quantity} × {item.name}{item.rating && <strong>★ {item.rating}/5</strong>}</span></div>)}</div>
       </article>)}</div> : <p>Aún no hay comentarios para esta cocina.</p>}
+    </div>
+  </dialog>, document.body);
+}
+
+type PickupSchedule = { date: string; start: string; end: string; dishes: string[] };
+
+function PickupNoticeDialog({ schedules, onClose, onConfirm }: {
+  schedules: PickupSchedule[];
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (!ref.current?.open) ref.current?.showModal(); }, []);
+  return createPortal(<dialog ref={ref} className="pickup-notice-dialog" aria-labelledby="pickup-notice-title" onClose={onClose}>
+    <div className="pickup-notice-scroll dialog-scroll">
+      <button type="button" className="icon-button pickup-notice-close" onClick={() => ref.current?.close()} aria-label="Cerrar aviso de recojo"><X size={20} /></button>
+      <span className="eyebrow">ANTES DE RESERVAR</span>
+      <h2 id="pickup-notice-title">Ten presente tu hora de recojo</h2>
+      <p className="pickup-notice-intro">Tu comida te esperará en la Entrada del Comedor UTEC, piso 2, durante {schedules.length === 1 ? "este horario" : "estos horarios"}:</p>
+      <div className="pickup-notice-windows">
+        {schedules.map((schedule) => <section className="pickup-notice-window" key={`${schedule.date}|${schedule.start}|${schedule.end}`} aria-label={`Recojo de ${schedule.dishes.join(", ")}`}>
+          <p className="pickup-notice-date"><Clock3 size={18} aria-hidden="true" /> {dateLabel(schedule.date, { weekday: "long", day: "numeric", month: "long" })}</p>
+          <div className="pickup-notice-hours">
+            <div><span>Comienza</span><strong>{timeLabel(schedule.start)}</strong></div>
+            <ArrowRight size={21} aria-hidden="true" />
+            <div className="pickup-notice-end"><span>Termina</span><strong>{timeLabel(schedule.end)}</strong></div>
+          </div>
+          <small>{schedule.dishes.join(" · ")}</small>
+        </section>)}
+      </div>
+      <p className="pickup-notice-fridge"><Refrigerator size={24} aria-hidden="true" /><span>Si no alcanzas a recogerla a tiempo, dejaremos tu táper en la refri. Subiremos una foto de dónde quedó para que puedas encontrarlo en <strong>Pedidos</strong>.</span></p>
+      <div className="pickup-notice-actions"><Button type="button" variant="secondary" onClick={() => ref.current?.close()}>Volver al carrito</Button><Button type="button" onClick={() => { ref.current?.close(); onConfirm(); }}>Confirmar y continuar a Yape <ArrowRight size={18} aria-hidden="true" /></Button></div>
+      <p className="pickup-notice-ack">Al confirmar, entiendo que el recojo fuera {schedules.length === 1 ? "del horario indicado" : "de los horarios indicados"} queda a mi cargo. Si llego después, revisaré la foto de la refri para ubicar mi comida.</p>
     </div>
   </dialog>, document.body);
 }
