@@ -336,7 +336,7 @@ export async function kitchenStudentCandidates(
   return { students, total: Number(count.rows[0].total) };
 }
 
-export async function addKitchenReservation(kitchenId, actorId, data) {
+export async function addKitchenReservation(kitchenId, actorId, data, now = new Date()) {
   const offerId = typeof data?.offerId === "string" ? data.offerId : "";
   const studentId = typeof data?.studentId === "string" ? data.studentId : "";
   const quantity = Number(data?.quantity ?? 1);
@@ -361,6 +361,9 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
     ).rows[0];
 
     if (!offer) fail("Menú no encontrado.", 404);
+    const pickupStart = new Date(`${offer.date}T${offer.deliveryTime}:00-05:00`);
+    if (now < pickupStart)
+      fail("Las altas extemporáneas se habilitan desde el inicio del recojo.", 409);
     const student = (
       await db.query("SELECT id FROM users WHERE id=$1 AND role='consumer'", [
         studentId,
@@ -391,16 +394,14 @@ export async function addKitchenReservation(kitchenId, actorId, data) {
     const stock = await db.query(
       `UPDATE offers SET reserved_count=reserved_count+$3,sold_out_at=CASE WHEN reserved_count+$3=capacity THEN $4 ELSE sold_out_at END
        WHERE id=$1 AND kitchen_id=$2 AND reserved_count+$3<=capacity RETURNING id`,
-      [offerId, kitchenId, quantity, new Date().toISOString()],
+      [offerId, kitchenId, quantity, now.toISOString()],
     );
 
     if (!stock.rowCount) fail("No quedan suficientes porciones.", 409);
     const orderId = randomUUID();
     const total = offer.priceCents * quantity;
-    const extraordinary =
-      Date.now() >=
-      new Date(`${offer.date}T${offer.pickupUntil}:00-05:00`).getTime();
-    const createdAt = new Date().toISOString();
+    const extraordinary = true;
+    const createdAt = now.toISOString();
 
     await db.query(
       `INSERT INTO orders(id,code,user_id,kitchen_id,kitchen_name,offer_date,delivery_time,pickup_until,pickup_point,status,payment,total_cents,fulfillment_status,created_at,delivered_at,review_enabled)
@@ -545,7 +546,7 @@ export async function updateKitchenReservation(
   return transaction(async (db) => {
     const order = (
       await db.query(
-        `SELECT id,status,fulfillment_status AS "fulfillmentStatus",delivered_at AS "deliveredAt",offer_date AS date,pickup_until AS "pickupUntil",created_at AS "createdAt",payment_checkout_id AS "paymentCheckoutId",fridge_at AS "fridgeAt",
+        `SELECT id,status,fulfillment_status AS "fulfillmentStatus",delivered_at AS "deliveredAt",offer_date AS date,delivery_time AS "deliveryTime",pickup_until AS "pickupUntil",created_at AS "createdAt",payment_checkout_id AS "paymentCheckoutId",fridge_at AS "fridgeAt",
          EXISTS(SELECT 1 FROM kitchen_reservation_events e WHERE e.order_id=orders.id AND e.action='manual_add') AS "manualAdded"
          FROM orders WHERE id=$1 AND kitchen_id=$2`,
         [orderId, kitchenId],
@@ -603,11 +604,12 @@ export async function updateKitchenReservation(
 
       if (
         action === "cancel" &&
-        new Date(order.createdAt).getTime() >
-          new Date(`${order.date}T${order.pickupUntil}:00-05:00`).getTime()
+        order.manualAdded &&
+        new Date(order.createdAt).getTime() >=
+          new Date(`${order.date}T${order.deliveryTime}:00-05:00`).getTime()
       )
         fail(
-          "Una reserva extraordinaria posterior al recojo no se puede marcar como ausencia.",
+          "Una reserva extemporánea no se puede marcar como ausencia.",
           409,
         );
 
@@ -628,19 +630,19 @@ export async function updateKitchenReservation(
             (order.fulfillmentStatus === "delivered" && order.deliveredAt) ||
             new Date().toISOString()
           : null;
-      const pickupEnd = new Date(
-        `${order.date}T${order.pickupUntil}:00-05:00`,
+      const pickupStart = new Date(
+        `${order.date}T${order.deliveryTime}:00-05:00`,
       ).getTime();
       const extraordinaryManual =
-        order.manualAdded && new Date(order.createdAt).getTime() >= pickupEnd;
+        order.manualAdded && new Date(order.createdAt).getTime() >= pickupStart;
 
       if (
         action === "deliver" &&
         requestedDeliveredAt &&
         extraordinaryManual &&
-        new Date(requestedDeliveredAt).getTime() < pickupEnd
+        new Date(requestedDeliveredAt).getTime() < pickupStart
       )
-        fail("La entrega extemporánea no puede ser anterior al fin de recojo.");
+        fail("La entrega extemporánea no puede ser anterior al inicio del recojo.");
       const selectedId = Number(data.orderItemId);
       const selectedItem =
         items.find((item) => item.id === selectedId) ||

@@ -927,6 +927,7 @@ function KitchenReservationPanel({
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [refreshStudents, setRefreshStudents] = useState(0);
   const [busyOrder, setBusyOrder] = useState("");
+  const [nowMs, setNowMs] = useState(Date.now());
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [paymentFilter, setPaymentFilter] = useState("all");
@@ -957,6 +958,20 @@ function KitchenReservationPanel({
   const [fridgeError, setFridgeError] = useState("");
   const [extraQuantity, setExtraQuantity] = useState("1");
   const [extraMethod, setExtraMethod] = useState("");
+  useEffect(() => {
+    const moments = [offer.deliveryTime, offer.pickupUntil].map((time) =>
+      new Date(`${offer.date}T${time}:00-05:00`).getTime(),
+    );
+    const timers = moments.filter((moment) => moment > Date.now()).map((moment) =>
+      window.setTimeout(() => setNowMs(Date.now()), moment - Date.now() + 100),
+    );
+    const updateClock = () => setNowMs(Date.now());
+    document.addEventListener("visibilitychange", updateClock);
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      document.removeEventListener("visibilitychange", updateClock);
+    };
+  }, [offer.date, offer.deliveryTime, offer.pickupUntil]);
   useEffect(() => { if (extraItem) extraDialogRef.current?.showModal(); }, [extraItem]);
   useEffect(() => { if (removeItem) removeDialogRef.current?.showModal(); }, [removeItem]);
   useEffect(() => { if (fridgeItem) fridgeDialogRef.current?.showModal(); }, [fridgeItem]);
@@ -1019,6 +1034,10 @@ function KitchenReservationPanel({
     }
   }
   async function addStudent(student: { id: string; name: string }) {
+    if (!pickupStarted) {
+      setError("Las altas extemporáneas se habilitan desde el inicio del recojo.");
+      return;
+    }
     setBusyOrder(student.id);
     setError("");
     try {
@@ -1120,7 +1139,7 @@ function KitchenReservationPanel({
       extraordinary:
         item.manualAdded &&
         new Date(item.createdAt).getTime() >=
-          new Date(`${offer.date}T${offer.pickupUntil}:00-05:00`).getTime(),
+          new Date(`${offer.date}T${offer.deliveryTime}:00-05:00`).getTime(),
       editing: item.fulfillmentStatus === "delivered",
       maxQuantity: item.paymentCheckoutId ? item.quantity : Math.max(
         1,
@@ -1229,10 +1248,14 @@ function KitchenReservationPanel({
       setBusyOrder("");
     }
   }
+  const pickupStartTime = new Date(
+    `${offer.date}T${offer.deliveryTime}:00-05:00`,
+  ).getTime();
   const pickupEndTime = new Date(
     `${offer.date}T${offer.pickupUntil}:00-05:00`,
   ).getTime();
-  const pickupEnded = Date.now() >= pickupEndTime;
+  const pickupStarted = nowMs >= pickupStartTime;
+  const pickupEnded = nowMs >= pickupEndTime;
   const canAdd = offer.reservedCount < offer.capacity;
   const activeReservations = reservations.filter(
     (item) =>
@@ -1419,7 +1442,7 @@ function KitchenReservationPanel({
                         item.fulfillmentStatus === "pending" &&
                         !item.fridgeAt &&
                         pickupEnded &&
-                        new Date(item.createdAt).getTime() <= pickupEndTime && (
+                        (!item.manualAdded || new Date(item.createdAt).getTime() < pickupStartTime) && (
                           <Button
                             variant="quiet"
                             disabled={!!busyOrder}
@@ -1540,6 +1563,7 @@ function KitchenReservationPanel({
           <p>
             {linkingPlaceholderId ? "Busca la cuenta recién creada. Las porciones ya están apartadas y no se descontarán otra vez." : "Busca estudiantes para añadir una reserva o una porción adicional. Cada venta adicional se registra con su propio medio de pago y descuenta del cupo."}
           </p>
+          {!linkingPlaceholderId && !pickupStarted && <p className="km-hint">Podrás añadir estudiantes desde el inicio del recojo: {timeLabel(offer.deliveryTime)}.</p>}
           {linkingPlaceholderId && <Button variant="quiet" onClick={() => { setLinkingPlaceholderId(null); setSearch(""); }}>Dejar para más tarde</Button>}
         </div>
         {canAdd || linkingPlaceholderId ? (
@@ -1581,14 +1605,14 @@ function KitchenReservationPanel({
                     </span>
                     {linkingPlaceholderId ? <Button variant="secondary" disabled={!!busyOrder || student.alreadyAdded} onClick={() => linkProvisional(student.id)}>Vincular</Button> : student.alreadyAdded ? <Button
                       variant="secondary"
-                      disabled={!!busyOrder || !reservations.some((item) => item.studentEmail === student.email && item.status === "reservado" && item.paymentStatus === "approved") || Date.now() < new Date(`${offer.date}T${offer.deliveryTime}:00-05:00`).getTime() || pickupEnded}
+                      disabled={!!busyOrder || !reservations.some((item) => item.studentEmail === student.email && item.status === "reservado" && item.paymentStatus === "approved") || !pickupStarted || pickupEnded}
                       onClick={() => {
                         const source = reservations.find((item) => item.studentEmail === student.email && item.status === "reservado" && item.paymentStatus === "approved");
                         if (source) { setExtraItem(source); setExtraQuantity("1"); setExtraMethod(""); }
                       }}
                     >
                       Añadir otra porción
-                    </Button> : <Button variant="secondary" disabled={!!busyOrder} onClick={() => addStudent(student)}>Añadir</Button>}
+                    </Button> : <Button variant="secondary" disabled={!!busyOrder || !pickupStarted} onClick={() => addStudent(student)}>Añadir</Button>}
                   </div>
                 ))
               ) : (
@@ -1705,7 +1729,7 @@ function KitchenReservationPanel({
               step="60"
               min={
                 paymentPrompt?.extraordinary
-                  ? `${offer.date}T${offer.pickupUntil}`
+                  ? `${offer.date}T${offer.deliveryTime}`
                   : undefined
               }
               max={limaDeliveryInput(new Date().toISOString())}
@@ -1714,7 +1738,7 @@ function KitchenReservationPanel({
             />
             <small>
               {paymentPrompt?.extraordinary
-                ? "Hora de Lima. En altas extemporáneas, la reserva toma esta misma hora y no puede ser anterior al fin de recojo."
+                ? "Hora de Lima. En altas extemporáneas, la reserva toma esta misma hora y no puede ser anterior al inicio del recojo."
                 : "Hora de Lima. Puedes corregirla después de entregar."}
             </small>
           </label>
@@ -1774,7 +1798,7 @@ function KitchenReservationPanel({
               (apiPrefix === "/api/admin" &&
                 (!promptDeliveredAt ||
                   (paymentPrompt?.extraordinary &&
-                    promptDeliveredAt < `${offer.date}T${offer.pickupUntil}`)))
+                    promptDeliveredAt < `${offer.date}T${offer.deliveryTime}`)))
             }
           >
             {busyOrder ? "Guardando…" : "Guardar entrega"}

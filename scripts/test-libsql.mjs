@@ -860,11 +860,23 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         ).rows[0].actor,
         "admin-actor",
       );
+      const beforePickupAdd = await fetch(`${base}/api/admin/reservations/add`, {
+        method: "POST", headers: adminHeaders,
+        body: JSON.stringify({ offerId: secondOffer, studentId: freshUser.id, quantity: 1 }),
+      });
+      assert.equal(beforePickupAdd.status, 409);
+      const todayInLima = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+      const adminLiveOffer = randomUUID();
+      await db.query(
+        `INSERT INTO offers(id,kitchen_id,dish_id,offer_date,delivery_time,pickup_until,booking_deadline_at,capacity)
+         VALUES($1,'second-kitchen',$2,$3,'00:00','00:10',$4,3)`,
+        [adminLiveOffer, secondDish, todayInLima, `${todayInLima}T00:00:00-05:00`],
+      );
       const adminAdded = await fetch(`${base}/api/admin/reservations/add`, {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({
-          offerId: secondOffer,
+          offerId: adminLiveOffer,
           studentId: freshUser.id,
           quantity: 1,
         }),
@@ -876,7 +888,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({
-          offerId: secondOffer,
+          offerId: adminLiveOffer,
           studentId: preUser.id,
           quantity: 1,
         }),
@@ -886,10 +898,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       const invalidCapacity = await fetch(`${base}/api/admin/offers/capacity`, {
         method: "POST",
         headers: adminHeaders,
-        body: JSON.stringify({ offerId: secondOffer, capacity: 1 }),
+        body: JSON.stringify({ offerId: adminLiveOffer, capacity: 1 }),
       });
 
       assert.equal(invalidCapacity.status, 409);
+      const adminDeliveredAt = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date()).replace(" ", "T");
       const adminDelivered = await fetch(
         `${base}/api/admin/reservations/update`,
         {
@@ -905,7 +918,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
             ).rows[0].id,
             deliveredQuantity: 1,
             paymentMethod: "QR",
-            deliveredAt: "2024-01-02T13:05",
+            deliveredAt: adminDeliveredAt,
           }),
         },
       );
@@ -919,7 +932,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
             adminOrderId,
           ])
         ).rows[0].delivered_at,
-        "2024-01-02T18:05:00.000Z",
+        new Date(`${adminDeliveredAt}:00-05:00`).toISOString(),
       );
       assert.equal(
         (
@@ -945,6 +958,12 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         kitchenStudentCandidates("another-kitchen", offerId, "pre@"),
         { status: 404 },
       );
+      const beforePickup = new Date(`${offerDate}T12:59:59-05:00`);
+      const atPickup = new Date(`${offerDate}T13:00:00-05:00`);
+      await assert.rejects(addKitchenReservation(
+        "test-kitchen", "kitchen-actor",
+        { offerId, studentId: preUser.id, quantity: 1 }, beforePickup,
+      ), /desde el inicio del recojo/);
       const manual = await addKitchenReservation(
         "test-kitchen",
         "kitchen-actor",
@@ -953,7 +972,9 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           studentId: preUser.id,
           quantity: 1,
         },
+        atPickup,
       );
+      assert.equal(manual.extraordinary, true);
       const manualReservation = (
         await kitchenData("test-kitchen")
       ).reservations.find((item) => item.orderId === manual.orderId);
@@ -988,14 +1009,6 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
         /Cambio de reserva inválido/,
       );
-      await assert.rejects(
-        updateKitchenReservation("test-kitchen", "kitchen-actor", {
-          orderId: manual.orderId,
-          action: "payment",
-          paymentMethod: "Efectivo",
-        }),
-        { status: 409 },
-      );
       await updateKitchenReservation("test-kitchen", "admin-actor", {
         orderId: manual.orderId,
         orderItemId: manual.orderItemId,
@@ -1024,12 +1037,6 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       );
       assert.equal(manualOrder.fulfillmentStatus, "delivered");
       assert.equal(manualOrder.payment, "Efectivo");
-      const ordinaryCreatedAt = (
-        await db.query("SELECT created_at FROM orders WHERE id=$1", [
-          manual.orderId,
-        ])
-      ).rows[0].created_at;
-
       await assert.rejects(
         updateKitchenReservation("test-kitchen", "kitchen-actor", {
           orderId: manual.orderId,
@@ -1041,7 +1048,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         }),
         { status: 403 },
       );
-      await updateKitchenReservation(
+      await assert.rejects(updateKitchenReservation(
         "test-kitchen",
         "kitchen-actor",
         {
@@ -1053,19 +1060,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           deliveredAt: "2024-01-02T13:05",
         },
         true,
-      );
-      assert.deepEqual(
-        (
-          await db.query(
-            'SELECT created_at AS "createdAt",delivered_at AS "deliveredAt" FROM orders WHERE id=$1',
-            [manual.orderId],
-          )
-        ).rows[0],
-        {
-          createdAt: ordinaryCreatedAt,
-          deliveredAt: "2024-01-02T18:05:00.000Z",
-        },
-      );
+      ), /anterior al inicio del recojo/);
       await assert.rejects(
         updateKitchenReservation("test-kitchen", "kitchen-actor", {
           orderId: manual.orderId,
@@ -1167,7 +1162,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
         offerId,
         studentId: preLongUser.id,
         quantity: 1,
-      });
+      }, atPickup);
       await assert.rejects(
         updateKitchenReservation("test-kitchen", "kitchen-actor", {
           orderId: first[0].id,
@@ -1260,11 +1255,11 @@ if (!process.env.MENUU_TEST_DB_PATH) {
             action: "deliver",
             deliveredQuantity: 1,
             paymentMethod: "Efectivo",
-            deliveredAt: "2020-01-01T13:09",
+            deliveredAt: "2020-01-01T12:59",
           },
           true,
         ),
-        /no puede ser anterior al fin de recojo/,
+        /no puede ser anterior al inicio del recojo/,
       );
       await updateKitchenReservation(
         "test-kitchen",
@@ -1275,7 +1270,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           action: "deliver",
           deliveredQuantity: 1,
           paymentMethod: "Efectivo",
-          deliveredAt: "2020-01-01T13:20",
+          deliveredAt: "2020-01-01T13:05",
         },
         true,
       );
@@ -1287,8 +1282,8 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           )
         ).rows[0],
         {
-          createdAt: "2020-01-01T18:20:00.000Z",
-          deliveredAt: "2020-01-01T18:20:00.000Z",
+          createdAt: "2020-01-01T18:05:00.000Z",
+          deliveredAt: "2020-01-01T18:05:00.000Z",
         },
       );
       await assert.rejects(
@@ -1296,7 +1291,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
           orderId: extraordinary.orderId,
           action: "cancel",
         }),
-        /extraordinaria posterior al recojo/,
+        /reserva extemporánea/,
       );
       await db.query(
         "INSERT INTO offers(id,kitchen_id,dish_id,offer_date,delivery_time,pickup_until,booking_deadline_at,capacity,reserved_count) VALUES('cancel-offer','test-kitchen',$1,'2099-01-01','13:00','13:10','2098-12-31T13:00:00-05:00',1,1)",
@@ -1559,7 +1554,7 @@ if (!process.env.MENUU_TEST_DB_PATH) {
     const manualStudentId = (await db.query("SELECT id FROM users WHERE email='pre@utec.edu.pe'")).rows[0].id;
     const accidental = await addKitchenReservation("test-kitchen", "kitchen-actor", {
       offerId: hourOffer, studentId: manualStudentId, quantity: 1,
-    });
+    }, new Date(`${offerDate}T15:00:00-05:00`));
     assert.equal((await db.query("SELECT reserved_count AS count FROM offers WHERE id=$1", [hourOffer])).rows[0].count, 1);
     await assert.rejects(removeKitchenReservation("another-kitchen", "admin-actor", { orderId: accidental.orderId }), { status: 404 });
     await assert.rejects(removeKitchenReservation("test-kitchen", "admin-actor", { orderId: prepaid.id }), { status: 409 });
