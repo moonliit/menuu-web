@@ -68,7 +68,47 @@ export async function pendingPayments() {
      WHERE p.status='under_review'
      GROUP BY p.id ORDER BY p.proof_uploaded_at ASC`,
   );
-  return result.rows;
+  if (!result.rows.length) return [];
+  const checkoutIds = result.rows.map((row) => row.id);
+  const ordersResult = await getDb().query(
+    `SELECT o.id,o.payment_checkout_id AS "checkoutId",o.code,o.kitchen_name AS "kitchenName",
+      o.offer_date AS date,o.delivery_time AS "deliveryTime",o.pickup_until AS "pickupUntil",
+      o.total_cents AS "totalCents"
+     FROM orders o WHERE o.payment_checkout_id=ANY($1::text[])
+     ORDER BY o.created_at,o.id`,
+    [checkoutIds],
+  );
+  const orderIds = ordersResult.rows.map((row) => row.id);
+  const [itemsResult, choicesResult] = await Promise.all([
+    getDb().query(
+      `SELECT i.id,i.order_id AS "orderId",i.dish_name AS name,i.image_url AS "imageUrl",
+        i.quantity,i.comment,i.unit_price_cents AS "unitPriceCents",i.total_cents AS "totalCents"
+       FROM order_items i WHERE i.order_id=ANY($1::text[])
+       ORDER BY i.sort_order,i.id`,
+      [orderIds],
+    ),
+    getDb().query(
+      `SELECT c.order_item_id AS "itemId",c.group_title AS title,c.choice_label AS label
+       FROM order_item_choices c JOIN order_items i ON i.id=c.order_item_id
+       WHERE i.order_id=ANY($1::text[]) ORDER BY c.sort_order,c.choice_id`,
+      [orderIds],
+    ),
+  ]);
+  const ordersByCheckout = new Map(checkoutIds.map((id) => [id, []]));
+  const ordersById = new Map();
+  for (const row of ordersResult.rows) {
+    const order = { ...row, items: [] };
+    ordersByCheckout.get(row.checkoutId).push(order);
+    ordersById.set(row.id, order);
+  }
+  const itemsById = new Map();
+  for (const row of itemsResult.rows) {
+    const item = { ...row, choices: [] };
+    ordersById.get(row.orderId)?.items.push(item);
+    itemsById.set(row.id, item);
+  }
+  for (const choice of choicesResult.rows) itemsById.get(choice.itemId)?.choices.push(choice);
+  return result.rows.map((row) => ({ ...row, orders: ordersByCheckout.get(row.id) }));
 }
 
 export async function reviewPayment(checkoutId, actorId, decision, note = "") {

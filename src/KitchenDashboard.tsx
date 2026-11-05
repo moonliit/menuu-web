@@ -15,6 +15,7 @@ import {
   ChevronRight,
   CircleAlert,
   Info,
+  Eye,
   ShieldBan,
   UserRoundCheck,
   X,
@@ -3405,6 +3406,25 @@ type PendingPayment = {
   codes: string;
   orderCount: number;
   proofUploadedAt: string;
+  orders: {
+    id: string;
+    code: string;
+    kitchenName: string;
+    date: string;
+    deliveryTime: string;
+    pickupUntil: string;
+    totalCents: number;
+    items: {
+      id: number;
+      name: string;
+      imageUrl: string;
+      quantity: number;
+      comment: string;
+      unitPriceCents: number;
+      totalCents: number;
+      choices: { itemId: number; title: string; label: string }[];
+    }[];
+  }[];
 };
 
 function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]; onChanged: () => Promise<void> }) {
@@ -3412,6 +3432,8 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
   const [confirmingId, setConfirmingId] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
+  const [selected, setSelected] = useState<PendingPayment | null>(null);
+  const detailsDialog = useRef<HTMLDialogElement>(null);
   async function review(id: string, decision: "approved" | "rejected") {
     setBusy(id);
     setError("");
@@ -3427,8 +3449,8 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
     <div className="admin-payment-head"><span className="eyebrow">PAGOS DE RESERVAS PREVIAS</span><h2>Yapes por verificar</h2><p>Comprueba el movimiento en la cuenta de Fernando, el monto y el código de seguridad antes de aprobar. La captura por sí sola no confirma el pago.</p></div>
     {error && <p className="km-alert" role="alert">{error}</p>}
     {payments.length ? payments.map((payment) => <article className="admin-payment-card" key={payment.id}>
-      <div><strong>{payment.studentName}</strong><span>{payment.studentEmail}</span><small>{payment.codes} · {payment.orderCount} {payment.orderCount === 1 ? "pedido" : "pedidos"}</small></div>
-      <strong>{money(payment.amountCents / 100)}</strong>
+      <div className="admin-payment-identity"><strong>{payment.studentName}</strong><span title={payment.studentEmail}>{payment.studentEmail}</span><small title={payment.orders.flatMap((order) => order.items.map((item) => `${item.quantity} × ${item.name}`)).join(" · ")}>{payment.orderCount} {payment.orderCount === 1 ? "pedido" : "pedidos"} · {payment.orders[0]?.items[0] ? `${payment.orders[0].items[0].quantity} × ${payment.orders[0].items[0].name}` : payment.codes}{payment.orders.reduce((count, order) => count + order.items.length, 0) > 1 ? " y más" : ""}</small></div>
+      <div className="admin-payment-total"><strong>{money(payment.amountCents / 100)}</strong><button type="button" className="admin-payment-details-button" title="Ver detalle del pedido" aria-label={`Ver detalle del pedido de ${payment.studentName}`} onClick={() => { setSelected(payment); detailsDialog.current?.showModal(); }}><Eye size={19} aria-hidden="true" /></button></div>
       <a href={`/api/payments/${payment.id}/proof`} target="_blank" rel="noreferrer">Ver comprobante</a>
       <label>Motivo de rechazo<input value={notes[payment.id] || ""} maxLength={300} onChange={(event) => setNotes((current) => ({ ...current, [payment.id]: event.target.value }))} placeholder="Solo si rechazas" /></label>
       <div className="admin-payment-actions"><Button variant="secondary" disabled={!!busy || confirmingId === payment.id} onClick={() => review(payment.id, "rejected")}>Rechazar</Button><Button disabled={!!busy || confirmingId === payment.id} onClick={() => { setError(""); setConfirmingId(payment.id); }}>Aprobar Yape</Button></div>
@@ -3438,6 +3460,11 @@ function AdminPaymentQueue({ payments, onChanged }: { payments: PendingPayment[]
         <div className="admin-payment-confirm-actions"><Button variant="secondary" disabled={!!busy} onClick={() => setConfirmingId("")}>Volver</Button><Button disabled={!!busy} onClick={() => review(payment.id, "approved")}>{busy === payment.id ? "Aprobando…" : "Sí, aprobar y borrar imagen"}</Button></div>
       </div>}
     </article>) : <p className="km-empty">No hay pagos anticipados por revisar.</p>}
+    <dialog ref={detailsDialog} className="admin-users-dialog admin-payment-details-dialog" aria-labelledby="admin-payment-details-title" onClose={() => setSelected(null)}>
+      <div className="admin-users-dialog-head"><div><span className="eyebrow">YAPE POR VERIFICAR</span><h2 id="admin-payment-details-title">Detalle del pedido</h2><p>{selected?.studentName} · {selected?.orderCount} {selected?.orderCount === 1 ? "pedido" : "pedidos"}</p></div><button type="button" className="admin-users-close" aria-label="Cerrar detalle" onClick={() => detailsDialog.current?.close()}><X size={21} /></button></div>
+      <div className="admin-payment-details-orders">{selected?.orders.map((order) => <section key={order.id} className="admin-payment-details-order"><div className="admin-payment-details-order-head"><div><strong>{order.kitchenName}</strong><small>{dateLabel(order.date)} · {timeLabel(order.deliveryTime)}–{timeLabel(order.pickupUntil)}</small></div><small>{order.code}</small></div>{order.items.map((item) => <div className={`admin-payment-details-item${item.imageUrl ? "" : " no-image"}`} key={item.id}>{item.imageUrl && <img src={item.imageUrl} alt="" />}<div><strong>{item.quantity} × {item.name}</strong>{item.choices.map((choice, index) => <small key={`${choice.title}-${index}`}>{choice.title}: {choice.label}</small>)}{item.comment && <small>Nota: {item.comment}</small>}</div><strong>{money(item.totalCents / 100)}</strong></div>)}<div className="admin-payment-details-order-total"><span>Total del pedido</span><strong>{money(order.totalCents / 100)}</strong></div></section>)}</div>
+      <div className="admin-payment-details-grand-total"><span>Total a verificar</span><strong>{money((selected?.amountCents || 0) / 100)}</strong></div>
+    </dialog>
   </section>;
 }
 

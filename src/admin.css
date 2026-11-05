@@ -280,8 +280,13 @@
 .admin-payment-head h2 { margin: 4px 0; color: var(--color-brand); font: 500 28px/1.2 var(--font-display); }
 .admin-payment-head p { margin: 0; color: var(--color-muted); }
 .admin-payment-card { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 12px 20px; border-top: 1px solid var(--color-border); padding-top: 16px; }
-.admin-payment-card > div:first-child { display: grid; gap: 3px; }
+.admin-payment-identity { display: grid; gap: 3px; min-width: 0; }
+.admin-payment-identity > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-payment-card span, .admin-payment-card small { color: var(--color-muted); }
+.admin-payment-total { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.admin-payment-details-button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid var(--color-border); border-radius: 14px; background: var(--color-background); color: var(--color-brand); cursor: pointer; }
+.admin-payment-details-button:hover { background: var(--color-orange-soft); }
+.admin-payment-details-button:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 3px; }
 .admin-payment-card a { color: var(--color-brand); font-weight: 600; text-decoration: underline; min-height: 44px; display: inline-flex; align-items: center; }
 .admin-payment-card label { grid-column: 1 / 3; display: grid; gap: 5px; font-size: 14px; font-weight: 600; }
 .admin-payment-card input { min-width: 0; width: 100%; }
@@ -291,7 +296,21 @@
 .admin-payment-confirm strong { color: var(--color-brand); }
 .admin-payment-confirm p { margin: 5px 0 0; font-size: 14px; line-height: 1.5; }
 .admin-payment-confirm-actions { grid-column: 2; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.admin-payment-details-dialog { width: min(580px, calc(100vw - 32px)); }
+.admin-payment-details-orders { display: grid; gap: 12px; }
+.admin-payment-details-order { padding: 14px; border: 1px solid var(--color-border); border-radius: 16px; background: white; }
+.admin-payment-details-order-head, .admin-payment-details-order-total, .admin-payment-details-grand-total { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.admin-payment-details-order-head { margin-bottom: 10px; }
+.admin-payment-details-order-head > div { display: grid; gap: 2px; }
+.admin-payment-details-order-head small, .admin-payment-details-item small { color: var(--color-muted); }
+.admin-payment-details-item { display: grid; grid-template-columns: 42px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--color-border); font-size: 14px; }
+.admin-payment-details-item.no-image { grid-template-columns: minmax(0,1fr) auto; }
+.admin-payment-details-item img { width: 42px; height: 42px; border-radius: 9px; object-fit: cover; }
+.admin-payment-details-item > div { display: grid; min-width: 0; gap: 2px; }
+.admin-payment-details-item > div strong { overflow-wrap: anywhere; }
+.admin-payment-details-order-total { padding-top: 9px; border-top: 1px solid var(--color-border); font-size: 14px; }
+.admin-payment-details-grand-total { margin-top: 16px; color: var(--color-brand); }
 @media (max-width: 700px) { .admin-payment-confirm-actions { grid-column: 1 / -1; flex-direction: column; } .admin-payment-confirm-actions .button { width: 100%; } }
 .km-prepaid-note { padding: 12px; border-radius: 12px; background: var(--color-orange-soft); color: var(--color-brand); }
 .km-already-added { color: var(--color-orange-ink) !important; font-weight: 600; }
-@media (max-width: 700px) { .admin-payment-queue { padding: 18px; } .admin-payment-card { grid-template-columns: 1fr auto; } .admin-payment-card a { grid-column: 1 / -1; } .admin-payment-card label { grid-column: 1 / -1; } .admin-payment-actions { grid-column: 1 / -1; justify-content: stretch; } .admin-payment-actions .button { flex: 1; } }
+@media (max-width: 700px) { .admin-payment-queue { padding: 18px; } .admin-payment-card { grid-template-columns: minmax(0,1fr) auto; column-gap: 8px; } .admin-payment-total { gap: 3px; font-size: 14px; } .admin-payment-card a { grid-column: 1 / -1; } .admin-payment-card label { grid-column: 1 / -1; } .admin-payment-actions { grid-column: 1 / -1; justify-content: stretch; } .admin-payment-actions .button { flex: 1; } }

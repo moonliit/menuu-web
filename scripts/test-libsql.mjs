@@ -250,7 +250,12 @@ if (!process.env.MENUU_TEST_DB_PATH) {
       Buffer.from("comprobante pendiente de revision manual"),
       "image/webp",
     );
-    assert.equal((await pendingPayments()).length, 1);
+    const pending = await pendingPayments();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].orders.length, 1);
+    assert.equal(pending[0].orders[0].items.length, 1);
+    assert.equal(pending[0].orders[0].items[0].quantity, 1);
+    assert.equal(pending[0].orders[0].items[0].totalCents, pending[0].amountCents);
     assert.equal((await paymentProof(first[0].paymentCheckoutId, { id: consumers[0].id, role: "consumer" })).mime, "image/webp");
     await assert.rejects(paymentProof(first[0].paymentCheckoutId, { id: consumers[1].id, role: "consumer" }), { status: 404 });
     await assert.rejects(
