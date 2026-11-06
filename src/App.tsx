@@ -1623,6 +1623,12 @@ export default function App() {
     "consumer" | "kitchen" | "admin" | null
   >(null);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const cartRequestRef = useRef(0);
+  const cartLastReadRef = useRef(0);
+  const cartWriteRef = useRef<Promise<unknown>>(Promise.resolve());
+  const cartOwnerRef = useRef<string | null>(null);
+  const activeCartUserRef = useRef<string | null>(null);
+  activeCartUserRef.current = state?.user?.role === "consumer" ? state.user.id : null;
   const bookingKeyRef = useRef<string | null>(null);
   const [notice, setNotice] = useState("");
   const [booking, setBooking] = useState(false);
@@ -1762,6 +1768,67 @@ export default function App() {
       if (requestId === ordersRequestRef.current) setOrdersLoading(false);
     }
   }
+  async function loadCart(userId: string, force = false) {
+    const startedAt = Date.now();
+    if (!force && startedAt - cartLastReadRef.current < 10_000) return;
+    cartLastReadRef.current = startedAt;
+    const requestId = ++cartRequestRef.current;
+    try {
+      await cartWriteRef.current.catch(() => {});
+      const result = await api<{ items: CartItem[] }>("/api/cart");
+      if (requestId === cartRequestRef.current && activeCartUserRef.current === userId)
+        setCart(result.items);
+    } catch (error) {
+      if (cartLastReadRef.current === startedAt) cartLastReadRef.current = 0;
+      throw error;
+    }
+  }
+  function saveCartAction(userId: string, action: unknown) {
+    const requestId = ++cartRequestRef.current;
+    cartWriteRef.current = cartWriteRef.current.catch(() => {}).then(() =>
+      api<{ items: CartItem[] }>("/api/cart", action),
+    ).then((result) => {
+      if (requestId === cartRequestRef.current && activeCartUserRef.current === userId)
+        setCart(result.items);
+    }).catch(() => {
+      if (activeCartUserRef.current === userId) {
+        setNotice("No se pudo sincronizar el carrito. Revisa tu conexión.");
+        loadCart(userId, true).catch(() => {});
+      }
+    });
+  }
+  useEffect(() => {
+    const userId = state?.user?.role === "consumer" ? state.user.id : null;
+    if (cartOwnerRef.current === userId) return;
+    const previousOwner = cartOwnerRef.current;
+    cartOwnerRef.current = userId;
+    ++cartRequestRef.current;
+    cartLastReadRef.current = 0;
+    if (!userId) {
+      if (previousOwner) setCart([]);
+      return;
+    }
+    if (previousOwner) setCart([]);
+    const guestItems = previousOwner ? [] : cart;
+    if (guestItems.length) saveCartAction(userId, { type: "merge", items: guestItems });
+    else if (page !== "carrito") loadCart(userId).catch(() => {});
+  }, [state?.user?.id, state?.user?.role]);
+  useEffect(() => {
+    const userId = state?.user?.role === "consumer" ? state.user.id : null;
+    if (!userId || page !== "carrito") return;
+    const update = () => {
+      if (!document.hidden) loadCart(userId).catch(() => {});
+    };
+    loadCart(userId, true).catch(() => {});
+    const timer = window.setInterval(update, 45_000);
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
+    };
+  }, [page, state?.user?.id, state?.user?.role]);
   useEffect(() => {
     refresh(false).catch((cause) =>
       setLoadError(
@@ -1803,7 +1870,7 @@ export default function App() {
             if (!document.hidden)
               refreshCatalog(true, page === "carrito").catch(() => {});
           },
-          page === "carrito" ? 15_000 : 60_000,
+          page === "carrito" ? 45_000 : 60_000,
         )
       : null;
     document.addEventListener("visibilitychange", update);
@@ -2171,6 +2238,10 @@ export default function App() {
     );
     const comment = rawComment.trim().replace(/\s+/g, " ");
     const key = JSON.stringify([offer.id, selectedChoices, comment]);
+    const userId = activeCartUserRef.current;
+    if (userId) saveCartAction(userId, { type: "add", item: {
+      key, offeringId: offer.id, choices: selectedChoices, comment, quantity: 1,
+    } });
     setCart((current) => {
       const found = current.find((item) => item.key === key);
       return found
@@ -2197,6 +2268,8 @@ export default function App() {
   }
   function quantity(key: string, delta: number) {
     bookingKeyRef.current = null;
+    const userId = activeCartUserRef.current;
+    if (userId) saveCartAction(userId, { type: "quantity", key, delta });
     setCart((current) =>
       current
         .map((item) =>
@@ -2213,6 +2286,8 @@ export default function App() {
   function removeFromCart(key: string) {
     bookingKeyRef.current = null;
     setBookingError("");
+    const userId = activeCartUserRef.current;
+    if (userId) saveCartAction(userId, { type: "remove", key });
     setCart((current) => current.filter((item) => item.key !== key));
   }
   function reviewPickupBeforePayment() {
@@ -2277,6 +2352,7 @@ export default function App() {
       });
       bookingKeyRef.current = null;
       setCart([]);
+      saveCartAction(state.user.id, { type: "clear" });
       invalidateCache("orders:");
       setOrdersLoaded(false);
       setOrdersPage(0);

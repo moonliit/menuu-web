@@ -13,6 +13,7 @@ import {
 } from "./admin.mjs";
 import { careers } from "./careers.mjs";
 import { closeDb, getDb } from "./db.mjs";
+import { changeCart, getCart } from "./cart.mjs";
 import {
   cancelOrder,
   createBooking,
@@ -733,6 +734,12 @@ async function handleApi(req, res, url) {
     return json(res, 200, { user: publicUser(user), careers });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/cart") {
+    const user = await userFromSession(sessionToken(req));
+    if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+    return json(res, 200, await getCart(user.id));
+  }
+
   if (req.method === "GET" && url.pathname === "/api/catalog")
     return json(
       res,
@@ -823,6 +830,12 @@ async function handleApi(req, res, url) {
   if (sessionToken(req) && !validCsrf(req))
     return error(res, 403, "Token CSRF inválido.");
   const data = await body(req);
+
+  if (url.pathname === "/api/cart") {
+    const user = await userFromSession(sessionToken(req));
+    if (!user || user.role !== "consumer") return error(res, 401, "Inicia sesión como estudiante.");
+    return json(res, 200, await changeCart(user.id, data));
+  }
 
   if (url.pathname === "/api/auth/register") {
     return error(
