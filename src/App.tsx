@@ -59,6 +59,7 @@ import {
   limaDayIndex,
   money,
   nextBookableDate,
+  nextHomeMenuDate,
   pickupWindow,
   timeLabel,
   weekDate,
@@ -288,17 +289,25 @@ function AuthErrorToast({
 
 const capitalizeFirst = (value: string) =>
   value.charAt(0).toLocaleUpperCase("es") + value.slice(1);
-const limaToday = () => {
+const limaToday = (now = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Lima",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(new Date());
+  }).formatToParts(now);
   const value = (type: string) =>
     parts.find((part) => part.type === type)?.value || "";
   return `${value("year")}-${value("month")}-${value("day")}`;
 };
+const limaHour = (now: Date) =>
+  Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Lima",
+      hour: "numeric",
+      hourCycle: "h23",
+    }).format(now),
+  );
 const emptyCatalog = (): Bootstrap["catalog"] => {
   const today = limaToday();
   const start = weekDate(today, -(limaDayIndex() ?? 6));
@@ -1866,12 +1875,9 @@ export default function App() {
       row.kitchenId,
       (kitchenSales.get(row.kitchenId) || 0) + row.units,
     );
-  const today = limaToday();
-  const nextMenuDate = offers.some(
-    (offer) => offer.date === today && offer.remaining > 0,
-  )
-    ? today
-    : nextBookableDate(offers, today);
+  const now = new Date();
+  const today = limaToday(now);
+  const nextMenuDate = nextHomeMenuDate(offers, today, limaHour(now));
   const menuOffers = kitchenFilter
     ? offers.filter((offer) => offer.kitchenId === kitchenFilter)
     : offers;
@@ -1895,7 +1901,7 @@ export default function App() {
     ? new Date(`${nextMenuDate}T12:00:00Z`).getUTCDay() - 1
     : null;
   const nextMenuLabel = nextMenuDate
-    ? nextMenuDate === limaToday()
+    ? nextMenuDate === today
       ? "hoy"
       : `el ${dateLabel(nextMenuDate)}`
     : null;
@@ -2095,6 +2101,7 @@ export default function App() {
   function goToNextMenu() {
     go("buscar");
     if (nextMenuDate) {
+      setMenuFilterManual(true);
       setWeek(featuredWeek);
       setDayFilter(nextMenuDay);
       setPickupFilter(null);
@@ -2104,6 +2111,7 @@ export default function App() {
   function goToNextKitchen(id: string) {
     goKitchen(id);
     if (nextMenuDate) {
+      setMenuFilterManual(true);
       setWeek(featuredWeek);
       setDayFilter(nextMenuDay);
     }

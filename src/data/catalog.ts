@@ -186,6 +186,17 @@ export function nextBookableDate(
   );
 }
 
+export function nextHomeMenuDate(
+  offerings: Pick<Offering, "date" | "bookable" | "remaining">[],
+  today: string,
+  limaHour: number,
+): string | null {
+  if (limaHour >= 16) return nextBookableDate(offerings, weekDate(today, 1));
+  if (offerings.some((offer) => offer.date === today && offer.remaining > 0))
+    return today;
+  return nextBookableDate(offerings, today);
+}
+
 export function timeLabel(time: string): string {
   const [hour, minute] = time.split(":").map(Number);
   return `${hour % 12 || 12}:${String(minute).padStart(2, "0")}\u00a0${hour >= 12 ? "p.m." : "a.m."}`;
